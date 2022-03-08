@@ -1,0 +1,56 @@
+sun-rpc runs on 32bit fields it seems
+
+first comes the message header which is just the size and an indicator bit (bit 32 0x80000000)
+that signifies if it is the final message in a package.
+
+then comes a unsigned 32bit id called the (xid)
+then a 32bit discriminator (messageType) {0 = call, 1 = reply}
+// rpc verion and progamm id semm to be in call only
+call :{ 
+    u32 Rpc version : 2      {0x00 00 00 02}
+    u32 Programm_Id : 100003 {0x00 01 86 a3}
+    u32 Programm_ver: 3      {0x00 00 00 03}
+    u32 Procedure   : 1      {0x00 00 00 01} // GETATTR
+    // AUTH {
+    u32 flavor      : 1      {0x00 00 00 01} // UNIX_AUTH 
+    u32 length      : 100    {0x00 00 00 64}
+    u32 stamp       :        {0x10 06 80 7d} // arbitarty ?
+    u32 length      : 13     {0x00 00 00 0d} // length of machine name
+    u8<align4(length)> :      { .... }       // machine name
+    u32 uid         : 1000   {0x00 00 03 e8} // User id
+    u32 gid         : 1000   {0x00 00 03 e8} // Group id
+    u32 len of aux gid : 16  {0x00 00 00 10} // length of followinng array of aux gid
+    u32[length]    : ... gids are following  // ....
+    u32 verifier auth flavor : 0 { 00 00 00 00} // UNIX AUTO
+    u32 length    : 00       {0x00 00 00 00} // 0 
+    u32 object_length : 20 bytes 
+    u8 [20] file handle: {0x ... }            // crc32 hash of handle get computted ... Maybe it'll be in the reply ?
+}
+// same xid as call 
+// u32 messageType : 1       {0x00 00 00 01} // reply 
+Reply: {
+    u32 replyState : 0       {0x00 00 00 00} // accepted
+    // AUTH
+    u32 flavor      : 0      {0x00 00 00 01} // NULL_AUTH 
+    u32 length      : 0      {0x00 00 00 00}
+    u32 accept_state: 0      {0x00 00 00 00} // 
+    u32 Stats       : 0      {0x00 00 00 00} // NFS_OK - nfsats3 NFS3_OK
+    // Reply
+    u32 Type        : 2      {0x00 00 00 02} // Directory
+    u32 octcal perms:        {0x00 00 41 ff}
+    u32 nlink       : 6      {0x00 00 00 06}
+    u32 uid         : 501    {0x00 00 01 f5}
+    u32 gid         : 1000   {0x00 00 03 e8}
+    u64 size        : 4096   {0x00 00 00 00 00 00 10 00}
+    u64 used        : 4096   {0x00 00 00 00 00 00 10 00}
+    u32[2] special  : 0, 0
+    u64 fsId
+    u64 fileId
+    u32 atime_secs;
+    u32 atime_nsecs
+    u32 mtime secs;
+    u32 mtine_nesecs;
+    u32 ctime_secs;
+    u32 ctime_nsecs;
+}
+
