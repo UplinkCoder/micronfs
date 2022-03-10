@@ -1,14 +1,23 @@
+#ifdef _WIN32
+#  include <io.h>
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#  pragma comment(lib, "ws2_32.lib")
+#else
+#  include <sys/socket.h>
+#  include <netinet/in.h>
+#  include <netdb.h>
+#  include <unistd.h>
+#  include <sys/mman.h>
+#endif
 #define _BSD_SOURCE 1
 #include <stdio.h>
 #include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netdb.h>
+
+
 #include <stdlib.h>
 #include <string.h>
 
-#include <unistd.h>
-#include <sys/mman.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <assert.h>
@@ -207,7 +216,11 @@ void RPCSerializer_PushNullAuth(RPCSerializer* self)
 int RPCSerializer_Send(RPCSerializer* self, int sock_fd)
 {
     int sz_send = write(sock_fd, self->BufferPtr, self->Size + sizeof(u32));
+#ifdef _WIN32
+    _commit(sock_fd);
+#else
     fsync(sock_fd);
+#endif
     printf("send: %d of %d bytes out\n", sz_send, self->Size);
     return sz_send;
 }
@@ -441,10 +454,16 @@ int NFS_readdir(uint32_t rootHandle)
 
 }
 
-
+#ifndef _WIN32
+#  define INVALID_SOCKET -1
+#endif
 
 int main(int argc, char* argv[])
 {
+#ifdef _WIN32
+	WSADATA  wsaData;
+	WSAStartup(MAKEWORD(2,0), &wsaData);
+#endif
     char* hostname = "192.168.178.26";
     if (argc == 2)
         hostname = argv[1];
@@ -452,8 +471,12 @@ int main(int argc, char* argv[])
     /* Create socket. */
     int sock = socket(AF_INET, SOCK_STREAM, 0);
 
-    if (sock == -1) {
+    if (sock == INVALID_SOCKET) {
+#ifdef _WIN32
+	printf("WSAGetLastError: %d\n", WSAGetLastError());
+#else
       perror("opening stream socket");
+#endif
       exit(1);
     }
 
