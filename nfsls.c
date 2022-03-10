@@ -184,7 +184,8 @@ void RPCSerializer_PushU32(RPCSerializer* self, uint32_t value)
     self->Size += 4;
 }
 
-void RPCSerializer_PushByteArray(RPCSerializer* self, uint8_t* array, uint32_t size)
+void RPCSerializer_PushByteArray(RPCSerializer* self,
+                                 uint8_t* array, uint32_t size)
 {
     RPCSerializer_EnsureSize(self, 4 + size);
     RPCSerializer_PushU32(self, size);
@@ -337,25 +338,13 @@ int read_dirpath(uint32_t const **readPtrP, uint8_t** writePtrP,
 
 mountlist_t* mountd_dump(int mountd_fd)
 {
-    uint32_t mountd_dump_xid;
     RPCSerializer s = {0};
     mountlist_t* result = 0;
 
-    RPCSerializer_InitCall(&s,
-        PREP_RPC(MOUNTD_PROGRAM, MOUNTD_DUMP_PROCEDURE));
-    {
-        // AUTH_NONE
-        RPCSerializer_PushU32(&s, 0);
-        // Length: 0
-        RPCSerializer_PushU32(&s, 0);
-        // --------------------------
-        //  verifier
-        // --------------------
-        // AUTH_NONE
-        RPCSerializer_PushU32(&s, 0);
-        // AuthSize: 0
-        RPCSerializer_PushU32(&s, 0);
-    }
+    uint32_t mountd_dump_xid =
+        RPCSerializer_InitCall(&s,
+            PREP_RPC(MOUNTD_PROGRAM, MOUNTD_DUMP_PROCEDURE));
+    RPCSerializer_PushNullAuth(&s);
     RPCSerializer_Finalize(&s);
     RPCSerializer_Send(&s, mountd_fd);
 
