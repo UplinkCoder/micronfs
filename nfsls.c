@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <assert.h>
+#include <errno.h>
 
 struct sockaddr_in server;
 struct sockaddr_in m_client;
@@ -55,8 +56,7 @@ static char recvbuffer[MAX_BUFFER_SIZE];
 /// returns -1 if it fails
 int connect_name(const char* hostname, const char* port)
 {
-    const int option = 1;
-    struct addrinfo* addr = 0;
+   struct addrinfo* addr = 0;
 
     int sfd = -1;
     if (getaddrinfo(hostname, port, 0, &addr) != 0)
@@ -111,6 +111,22 @@ typedef struct RPCSerializer
     uint32_t MaxSize;
 } RPCSerializer;
 
+#define PREP_RPC_XID(PROG, PROC, XID) \
+    (RPCCall) { \
+        .header = (RPCHeader) { \
+            .xid = XID, \
+            .call_or_reply = MESSAGE_TYPE_CALL \
+        }, \
+        .rpc_version = 2, \
+        .program_id = PROG, \
+        .program_ver = 2, \
+        .procedure = PROC, \
+    }
+
+#define PLACEHOLDER_XID 0x1234ABCD
+#define PREP_RPC(PROG, PROC) \
+    PREP_RPC_XID(PROG, PROC, PLACEHOLDER_XID)
+
 void RPCSerializer_Finalize(RPCSerializer* self)
 {
     RPCHeader* header = (RPCHeader*)self->BufferPtr;
@@ -128,7 +144,8 @@ void RPCSerializer_Init(RPCSerializer* self, uint8_t* Buffer, uint32_t sz)
 }
 #define CALL_DEFAULT_SIZE 1024
 
-void RPCSerializer_InitCall(RPCSerializer* self,  const RPCCall* q)
+/// Retruns: Xid for the call in host order
+static inline uint32_t RPCSerializer_InitCall(RPCSerializer* self,  RPCCall q)
 {
     if (!self->WritePtr)
     {
@@ -137,9 +154,15 @@ void RPCSerializer_InitCall(RPCSerializer* self,  const RPCCall* q)
         self->WritePtr = self->BufferPtr + sizeof(RPCCall);
     }
 
+    uint32_t xid = q.header.xid;
+    if (xid == PLACEHOLDER_XID)
+        q.header.xid = RandomXid();
+
     self->Size = sizeof(RPCCall) - sizeof(u32);
-    (*(RPCCall*)self->BufferPtr) =  *q;
+    (*(RPCCall*)self->BufferPtr) =  q;
     ByteFlip_Array((uint32_t*)self->BufferPtr, sizeof(RPCCall) / sizeof(u32));
+
+    return xid;
 }
 
 void RPCSerilizer_Reset(RPCSerializer* self)
@@ -171,6 +194,15 @@ void RPCSerializer_PushByteArray(RPCSerializer* self, uint8_t* array, uint32_t s
     self->BufferPtr += size + !!(size & 3);
 }
 
+void RPCSerializer_PushNullAuth(RPCSerializer* self)
+{
+    (*(uint32_t*)self->WritePtr++) = 0;
+    (*(uint32_t*)self->WritePtr++) = 0;
+    (*(uint32_t*)self->WritePtr++) = 0;
+    (*(uint32_t*)self->WritePtr++) = 0;
+    self->Size += 4 * sizeof(u32);
+}
+
 int RPCSerializer_Send(RPCSerializer* self, int sock_fd)
 {
     int sz_send = write(sock_fd, self->BufferPtr, self->Size + sizeof(u32));
@@ -181,42 +213,19 @@ int RPCSerializer_Send(RPCSerializer* self, int sock_fd)
 
 #define PORTMAP_PROGRAM 100000
 #define MOUNTD_PROGRAM  100005
+#define PORTMAP_DUMP_PROCEDURE 4
+#define MOUNTD_DUMP_PROCEDURE 2
 #define MESSAGE_TYPE_CALL 0
 
 void portmap_nullCall(int sock_fd)
 {
     RPCSerializer s = {0};
 
-    RPCCall NullProc = (RPCCall) {
-        .header = (RPCHeader) {
-            .xid = 0,
-            .call_or_reply = MESSAGE_TYPE_CALL
-        },
-        .rpc_version = 2,
-        .program_id = PORTMAP_PROGRAM,
-        .program_ver = 2,
-        .procedure = 0,
-    };
-
-    RPCSerializer_InitCall(&s, &NullProc);
-    {
-
-        // AUTH_NONE
-        RPCSerializer_PushU32(&s, 0);
-        // AuthSize: 0
-        RPCSerializer_PushU32(&s, 0);
-        // --------------------------
-        //  verifier
-        // --------------------
-        // AUTH_NONE
-        RPCSerializer_PushU32(&s, 0);
-        // AuthSize: 0
-        RPCSerializer_PushU32(&s, 0);
-
-    }
+    RPCSerializer_InitCall(&s, PREP_RPC
+        (PORTMAP_PROGRAM, 0));
+    RPCSerializer_PushNullAuth(&s);
     RPCSerializer_Finalize(&s);
     RPCSerializer_Send(&s, sock_fd);
-
 }
 
 portmap_dump_res* portmap_query_mountd(int sock_fd)
@@ -226,36 +235,11 @@ portmap_dump_res* portmap_query_mountd(int sock_fd)
         pm_dump_storage;
 
     RPCSerializer s = {0};
-    const uint32_t portmap_dump_xid
-        = RandomXid();
-    // send dump command
-    RPCCall portmap = (RPCCall) {
-        .header = (RPCHeader) {
-            .xid = portmap_dump_xid,
-            .call_or_reply = MESSAGE_TYPE_CALL
-        },
-        .rpc_version = 2,
-        .program_id = PORTMAP_PROGRAM,
-        .program_ver = 2,
-#define PORTMAP_DUMP_PROCEDURE 4
-        .procedure = PORTMAP_DUMP_PROCEDURE,
-    };
-#undef PORTMAP_DUMP_PROCEDURE
 
-    RPCSerializer_InitCall(&s, &portmap);
-    {
-        // AUTH_NONE
-        RPCSerializer_PushU32(&s, 0);
-        // Length: 0
-        RPCSerializer_PushU32(&s, 0);
-        // --------------------------
-        //  verifier
-        // --------------------
-        // AUTH_NONE
-        RPCSerializer_PushU32(&s, 0);
-        // AuthSize: 0
-        RPCSerializer_PushU32(&s, 0);
-    }
+    RPCSerializer_InitCall(&s,
+        PREP_RPC(PORTMAP_PROGRAM, PORTMAP_DUMP_PROCEDURE));
+
+    RPCSerializer_PushNullAuth(&s);
     RPCSerializer_Finalize(&s);
     RPCSerializer_Send(&s, sock_fd);
 
@@ -324,25 +308,41 @@ typedef struct mountlist_t {
     struct mountlist_t* next;
 } mountlist_t;
 
+int read_dirpath(uint32_t const **readPtrP, uint8_t** writePtrP,
+                                      uint32_t bufferLeft,
+                                      const char** dirPathP)
+{
+    const uint32_t* readPtr = *readPtrP;
+    uint8_t* writePtr = *writePtrP;
+
+    uint32_t pathlen = (htonl(*readPtr++));
+    if (bufferLeft < pathlen + 1)
+        return ENOMEM;
+
+    const char* dirpath_read_ptr = (const char*)readPtr;
+    readPtr += (pathlen >> 2) + !!(pathlen & 3);
+
+    const char* dirpath = (const char *)writePtr;
+    for(uint32_t i = 0; i < pathlen; i++)
+    {
+        *writePtr++ = dirpath_read_ptr[i];
+    }
+    *writePtr++ = '\0';
+
+    *writePtrP = writePtr;
+    *readPtrP = readPtr;
+    *dirPathP = dirpath;
+    return 0;
+}
+
 mountlist_t* mountd_dump(int mountd_fd)
 {
     uint32_t mountd_dump_xid;
     RPCSerializer s = {0};
     mountlist_t* result = 0;
 
-#define MOUNTD_DUMP_PROCEDURE 2
-    RPCCall mountd = (RPCCall) {
-        .header = (RPCHeader) {
-            .xid = mountd_dump_xid,
-            .call_or_reply = MESSAGE_TYPE_CALL
-        },
-        .rpc_version = 2,
-        .program_id = MOUNTD_PROGRAM,
-        .program_ver = 2,
-        .procedure = MOUNTD_DUMP_PROCEDURE,
-    };
-
-    RPCSerializer_InitCall(&s, &mountd);
+    RPCSerializer_InitCall(&s,
+        PREP_RPC(MOUNTD_PROGRAM, MOUNTD_DUMP_PROCEDURE));
     {
         // AUTH_NONE
         RPCSerializer_PushU32(&s, 0);
@@ -456,6 +456,10 @@ int NFS_readdir(uint32_t rootHandle)
 
 int main(int argc, char* argv[])
 {
+    char* hostname = "192.168.178.26";
+    if (argc == 2)
+        hostname = argv[1];
+
     /* Create socket. */
     int sock = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -466,14 +470,14 @@ int main(int argc, char* argv[])
 
     int addr_len = sizeof(s_client);
 
-    int portmap_fd = connect_name("192.168.178.26", "111");
+    int portmap_fd = connect_name(hostname, "111");
     assert(portmap_fd != -1);
 
     // portmap_nullCall(portmap_fd);
 
     portmap_dump_res* mountd_entry
         = portmap_query_mountd(portmap_fd);
-#if 1
+#if 0
     for(portmap_dump_res* dp = mountd_entry; dp; dp = dp->next)
     {
         printf("dp.version: %d\t dp.port: %d, dp.proto: %d\n",
@@ -494,7 +498,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    int mountd_fd = connect_name("192.168.178.26", port_str);
+    int mountd_fd = connect_name(hostname, port_str);
     assert(mountd_fd != -1);
 
     mountlist_t* mounts = mountd_dump(mountd_fd);
@@ -504,26 +508,26 @@ int main(int argc, char* argv[])
              m->hostname,  m->directory);
     }
 
-    int connection_fd = connect_name("192.168.178.26", "2049");
-    assert(connection_fd != -1);
+    int nfs_fd = connect_name(hostname, "2049");
+    assert(nfs_fd != -1);
 
 
-    while(connection_fd == -1)
+    while(nfs_fd == -1)
     {
         printf("Calling accept\n");
-        connection_fd = accept(sock, (struct sockaddr*)&s_client, &addr_len);
+        nfs_fd = accept(sock, (struct sockaddr*)&s_client, &addr_len);
     }
 
     int sendlen = sizeof(sendbuffer);
 
 //    NFS_readir(sendbuffer, &sendlen);
 
-    send(connection_fd, sendbuffer, sendlen, 0);
+    send(nfs_fd, sendbuffer, sendlen, 0);
 
-    int sz = read(connection_fd, recvbuffer, MAX_BUFFER_SIZE);
+    int sz = read(nfs_fd, recvbuffer, MAX_BUFFER_SIZE);
 
     printf ("We've got %d bytes yay\n", sz);
-    close(connection_fd);
+    close(nfs_fd);
 
     for(int i = 0; i < sz; i++)
     {
