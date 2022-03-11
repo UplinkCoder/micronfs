@@ -196,17 +196,6 @@ void RPCSerializer_PushU32(RPCSerializer* self, uint32_t value)
     self->Size += 4;
 }
 
-void RPCSerializer_PushByteArray(RPCSerializer* self,
-                                 uint8_t* array, uint32_t size)
-{
-    RPCSerializer_EnsureSize(self, 4 + size);
-    RPCSerializer_PushU32(self, size);
-    memcpy(self->BufferPtr, array, size);
-
-    self->Size += size + !!(size & 3);
-    self->BufferPtr += size + !!(size & 3);
-}
-
 void RPCSerializer_PushNullAuth(RPCSerializer* self)
 {
     uint32_t* WritePtr = (uint32_t*) self->WritePtr;
@@ -219,6 +208,7 @@ void RPCSerializer_PushNullAuth(RPCSerializer* self)
 }
 #define ALIGN4(VAR) (((VAR) + 3) & ~3)
 
+ // (&s, RandomXid(), "my-pc", uid, gid, n_aux_gids, aux_gids);
 void RPCSerializer_PushString(RPCSerializer* self,
                               uint32_t length, const char* str)
 {
@@ -226,14 +216,61 @@ void RPCSerializer_PushString(RPCSerializer* self,
 
     RPCSerializer_PushU32(self, length);
     char* strWritePtr = self->WritePtr;
-    *self->WritePtr += n_bytes;
+    self->WritePtr += n_bytes;
     self->Size += n_bytes;
 
     for(int i = 0; i < length; i++)
     {
         *strWritePtr++ = str[i];
     }
+}
 
+void RPCSerializer_PushU32Array(RPCSerializer *self, uint32_t n_elements, uint32_t array[])
+{
+    RPCSerializer_PushU32(self, n_elements);
+    for(int i = 0; i < n_elements; i++)
+    {
+        RPCSerializer_PushU32(self, array[i]);
+    }
+}
+
+uint32_t ComputeAuthSize(uint32_t string_length, uint32_t n_aux_gids)
+{
+    return 4 + 4 + ALIGN4(string_length)
+            + 4 + 4 + 4 + (n_aux_gids * 4);
+}
+
+void RPCSerializer_PushUnixAuth(RPCSerializer* self,
+                                uint32_t stamp,
+                                const char* machine_name,
+                                uint32_t uid, uint32_t gid,
+                                uint32_t n_aux_gids, uint32_t aux_gids[])
+{
+    uint32_t name_size = strlen(machine_name);
+    uint32_t auth_size = ComputeAuthSize(name_size, n_aux_gids);
+    
+    RPCSerializer_EnsureSize(self, auth_size);
+    
+    RPCSerializer_PushU32(self, 1);
+    RPCSerializer_PushU32(self, auth_size);
+    RPCSerializer_PushU32(self, stamp);
+    
+    RPCSerializer_PushString(self, name_size, machine_name);
+    assert(name_size == 12);
+    RPCSerializer_PushU32(self, uid);
+    RPCSerializer_PushU32(self, gid);
+    
+    RPCSerializer_PushU32Array(self, n_aux_gids, aux_gids);
+    // NONE VERIFIER
+    
+    RPCSerializer_PushU32(self, 0);
+    RPCSerializer_PushU32(self, 0);
+}
+
+void RPCSerializer_PushCookedAuth2(RPCSerializer* self)
+{
+    uint32_t cooked_array[] = {4, 24, 27, 30, 46, 108, 124, 132, 134, 1000};
+    RPCSerializer_PushUnixAuth(self, 0x01063ed3, "uplink-black", 1000, 1000, 10, cooked_array);
 }
 
 int RPCSerializer_Send(RPCSerializer* self, int sock_fd)
@@ -248,14 +285,18 @@ int RPCSerializer_Send(RPCSerializer* self, int sock_fd)
     return sz_send;
 }
 
-#define PORTMAP_PROGRAM 100000
-#define MOUNT_PROGRAM  100005
-#define PORTMAP_DUMP_PROCEDURE 4
-#define PORTMAP_DUMP_GETPORT 3
-#define MOUNT_MNT_PROCEDURE 1
-#define MOUNT_DUMP_PROCEDURE 2
-#define MOUNT_UMNT_PROCEDURE 3
-#define MOUNT_EXPORT_PROCEDURE 5
+#define PORTMAP_PROGRAM         100000
+#define PORTMAP_DUMP_PROCEDURE       4
+#define PORTMAP_DUMP_GETPORT         3
+
+#define MOUNT_PROGRAM           100005
+#define MOUNT_MNT_PROCEDURE          1
+#define MOUNT_DUMP_PROCEDURE         2
+#define MOUNT_UMNT_PROCEDURE         3
+#define MOUNT_EXPORT_PROCEDURE       5
+
+#define NFS_PROGRAM             100003
+#define NFS_READDIR_PROCEDURE       16
 #define MESSAGE_TYPE_CALL 0
 #define PROTO_TCP 6
 
@@ -502,8 +543,11 @@ fhandle3 mountd_mnt(int mountd_fd, const char* dirPath)
         RPCSerializer_InitCall(&s,
             PREP_RPC_CALL(MOUNT_PROGRAM, 3, MOUNT_MNT_PROCEDURE));
 
-    RPCSerializer_PushNullAuth(&s);
-    uint32_t dirPathLength = strlen(dirPath);
+    //RPCSerializer_PushNullAuth(&s);
+    RPCSerializer_PushCookedAuth2(&s);
+    
+  
+  uint32_t dirPathLength = strlen(dirPath);
 
     RPCSerializer_PushString(&s, dirPathLength, dirPath);
     RPCSerializer_Finalize(&s);
@@ -520,13 +564,12 @@ fhandle3 mountd_mnt(int mountd_fd, const char* dirPath)
     _Bool reply_accepted = (*readPtr++) == 0;
 
     SkipAuth(&readPtr);
-    
+
     _Bool rpc_accepted = (*readPtr++) == 0;
 
     nfsstat3 status = htonl(*readPtr++);
     printf("mnt: '%s'   status: %s\n", dirPath, nfsstat3_toChars(status));
-    int k = 12;
-
+    //TODO we should ready the required auth here ....
     result = readFileHandle(&readPtr);
 
     return result;
@@ -611,10 +654,37 @@ mountlist_t* mountd_dump(int mountd_fd)
     return result;
 }
 
-int NFS_readdir(uint32_t rootHandle)
+int nfs_readdir(int nfs_fd, const fhandle3* dir)
 {
-    #define READDIR_PROCN 16;
+    RPCSerializer s = {0};
+    mountlist_t* result = 0;
 
+    uint32_t mount_dump_xid =
+        RPCSerializer_InitCall(&s,
+            PREP_RPC_CALL(NFS_PROGRAM, 3, NFS_READDIR_PROCEDURE));
+
+    // RPCSerializer_PushNullAuth(&s);
+    
+    const uint32_t uid = 0;
+    const uint32_t gid = 0;
+    const uint32_t n_aux_gids = 0;
+    const uint32_t aux_gids[] = {};
+    
+    RPCSerializer_PushCookedAuth(&s);
+    
+    uint32_t length = 0;
+    for(int i = 0; i < 8;i++)
+    {
+        if (((uint32_t*)dir->handleData)[i] == 0)
+            break;
+        length += 4;
+    }
+
+    RPCSerializer_PushString(&s, length, (const char*)dir->handleData);
+    RPCSerializer_Finalize(&s);
+    RPCSerializer_Send(&s, nfs_fd);
+
+    int read_sz = read(nfs_fd, recvbuffer, sizeof(recvbuffer));
 }
 
 #ifndef _WIN32
@@ -683,9 +753,13 @@ int main(int argc, char* argv[])
              m->hostname,  m->directory);
     }
 
-    fhandle3 fd = mountd_mnt(mountd_fd, "/nfs/git");
-    printFileHandle(&fd);
-                  mountd_umnt(mountd_fd, "/nfs/git");
+    fhandle3 fh = mountd_mnt(mountd_fd, "/nfs/git");
+    printFileHandle(&fh);
+
+    int nfs_fd = connect_name("192.168.178.26", "2049");
+    void* rddir = nfs_readdir(nfs_fd, &fh);
+
+    mountd_umnt(mountd_fd, "/nfs/git");
 
 #if 0
     while(nfs_fd == -1)
