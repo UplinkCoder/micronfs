@@ -58,7 +58,7 @@ typedef const uint32_t ** readPtrP_t;
 #ifndef MAP_UNINITIALIZED
 #define MAP_UNINITIALIZED 0
 #endif
-#define MAX_BUFFER_SIZE 1024
+#define MAX_BUFFER_SIZE 4096
 
 static char sendbuffer[MAX_BUFFER_SIZE];
 static char recvbuffer[MAX_BUFFER_SIZE];
@@ -168,7 +168,7 @@ static inline uint32_t RPCSerializer_InitCall(RPCSerializer* self,  RPCCall q)
 
     uint32_t xid = q.header.xid;
     if (xid == PLACEHOLDER_XID)
-        q.header.xid = RandomXid();
+        xid = q.header.xid = RandomXid();
 
     self->Size = sizeof(RPCCall) - sizeof(u32);
     (*(RPCCall*)self->BufferPtr) =  q;
@@ -225,7 +225,7 @@ void RPCSerializer_PushString(RPCSerializer* self,
     }
 }
 
-void RPCSerializer_PushU32Array(RPCSerializer *self, uint32_t n_elements, uint32_t array[])
+void RPCSerializer_PushU32Array(RPCSerializer *self, uint32_t n_elements, const uint32_t array[])
 {
     RPCSerializer_PushU32(self, n_elements);
     for(int i = 0; i < n_elements; i++)
@@ -244,25 +244,24 @@ void RPCSerializer_PushUnixAuth(RPCSerializer* self,
                                 uint32_t stamp,
                                 const char* machine_name,
                                 uint32_t uid, uint32_t gid,
-                                uint32_t n_aux_gids, uint32_t aux_gids[])
+                                const uint32_t n_aux_gids, const uint32_t aux_gids[])
 {
     uint32_t name_size = strlen(machine_name);
     uint32_t auth_size = ComputeAuthSize(name_size, n_aux_gids);
-    
+
     RPCSerializer_EnsureSize(self, auth_size);
-    
+
     RPCSerializer_PushU32(self, 1);
     RPCSerializer_PushU32(self, auth_size);
     RPCSerializer_PushU32(self, stamp);
-    
+
     RPCSerializer_PushString(self, name_size, machine_name);
-    assert(name_size == 12);
     RPCSerializer_PushU32(self, uid);
     RPCSerializer_PushU32(self, gid);
-    
+
     RPCSerializer_PushU32Array(self, n_aux_gids, aux_gids);
     // NONE VERIFIER
-    
+
     RPCSerializer_PushU32(self, 0);
     RPCSerializer_PushU32(self, 0);
 }
@@ -545,8 +544,8 @@ fhandle3 mountd_mnt(int mountd_fd, const char* dirPath)
 
     //RPCSerializer_PushNullAuth(&s);
     RPCSerializer_PushCookedAuth2(&s);
-    
-  
+
+
   uint32_t dirPathLength = strlen(dirPath);
 
     RPCSerializer_PushString(&s, dirPathLength, dirPath);
@@ -593,7 +592,7 @@ mountlist_t* mountd_dump(int mountd_fd)
 
     assert(sz_read > (int)sizeof(RPCHeader));
 
-    const uint32_t* readPtr = (const uint32_t*)(recvbuffer);
+     const uint32_t* readPtr = (const uint32_t*)(recvbuffer);
     RPCHeader header = parseRPCHeader(&readPtr);
 
     _Bool accepted = (*readPtr++) == 0;
@@ -644,6 +643,7 @@ mountlist_t* mountd_dump(int mountd_fd)
                 storage_left -= (dlen + 1);
             }
             hasNext = ((*readPtr++) != 0);
+            hadPrev = 1;
         }
     }
     else
@@ -654,24 +654,25 @@ mountlist_t* mountd_dump(int mountd_fd)
     return result;
 }
 
-int nfs_readdir(int nfs_fd, const fhandle3* dir)
+int nfs_readdir(int nfs_fd, const fhandle3* dir, uint64_t cookie, uint64_t cookieverf)
 {
     RPCSerializer s = {0};
     mountlist_t* result = 0;
 
-    uint32_t mount_dump_xid =
+    uint32_t readdir_xid =
         RPCSerializer_InitCall(&s,
             PREP_RPC_CALL(NFS_PROGRAM, 3, NFS_READDIR_PROCEDURE));
 
     // RPCSerializer_PushNullAuth(&s);
-    
+
     const uint32_t uid = 0;
     const uint32_t gid = 0;
     const uint32_t n_aux_gids = 0;
     const uint32_t aux_gids[] = {};
-    
-    RPCSerializer_PushCookedAuth(&s);
-    
+
+    RPCSerializer_PushUnixAuth(&s,
+        RandomXid(), "bongo_pc", uid, gid, n_aux_gids, aux_gids);
+
     uint32_t length = 0;
     for(int i = 0; i < 8;i++)
     {
@@ -681,10 +682,69 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir)
     }
 
     RPCSerializer_PushString(&s, length, (const char*)dir->handleData);
+
+    uint32_t cookie_hi = cookie >> 32;
+    uint32_t cookie_lw = cookie & UINT32_MAX;
+
+    uint32_t cookie_verif_hi = cookieverf >> 32;
+    uint32_t cookie_verif_lw = cookieverf & UINT32_MAX;
+
+    RPCSerializer_PushU32(&s, cookie_hi);
+    RPCSerializer_PushU32(&s, cookie_lw);
+
+    RPCSerializer_PushU32(&s, cookie_verif_hi);
+    RPCSerializer_PushU32(&s, cookie_verif_lw);
+
+    RPCSerializer_PushU32(&s, 2048); // max size of result structure
+
     RPCSerializer_Finalize(&s);
     RPCSerializer_Send(&s, nfs_fd);
 
     int read_sz = read(nfs_fd, recvbuffer, sizeof(recvbuffer));
+
+    printf("read: %d bytes as reply to readdir\n", read_sz);
+
+    const uint32_t* readPtr = (const uint32_t*)(recvbuffer);
+    RPCHeader header = parseRPCHeader(&readPtr);
+    assert(header.xid == readdir_xid);
+
+    _Bool accepted = (*readPtr++) == 0;
+
+    SkipAuth(&readPtr);
+
+    nfsstat3 status = htonl(*readPtr++);
+    printf("Status: %s\n", nfsstat3_toChars(status));
+
+    _Bool hasAttrs = (*readPtr++) != 0;
+    if (hasAttrs)
+    {
+        printf("Ooook Attributes nooooo!!");
+    }
+    cookie_verif_hi = htonl(*readPtr++);
+    cookie_verif_lw = htonl(*readPtr++);
+    for(;;)
+    {
+        _Bool hasNext = ((*readPtr++) != 0);
+        if (!hasNext)
+            break;
+        uint32_t fileIdHi = htonl(*readPtr++);
+        uint32_t fileIdLw = htonl(*readPtr++);
+
+        uint32_t name_length = htonl(*readPtr++);
+
+        char str_buf[1024];
+        char* writePtr = str_buf;
+
+        printf("File: '%s'\n", readString(&readPtr, &writePtr, name_length));
+        cookie_hi = htonl(*readPtr++);
+        cookie_lw = htonl(*readPtr++);
+        hasNext = (*readPtr++);
+
+    }
+    _Bool wasLastList = (*readPtr++);
+
+    // printf("%x %x %x %x", *readPtr++, *readPtr++, *readPtr++, *readPtr++);
+
 }
 
 #ifndef _WIN32
@@ -757,7 +817,7 @@ int main(int argc, char* argv[])
     printFileHandle(&fh);
 
     int nfs_fd = connect_name("192.168.178.26", "2049");
-    void* rddir = nfs_readdir(nfs_fd, &fh);
+    void* rddir = nfs_readdir(nfs_fd, &fh, 0, 0);
 
     mountd_umnt(mountd_fd, "/nfs/git");
 
