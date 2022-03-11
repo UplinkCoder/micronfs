@@ -663,8 +663,8 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir, uint64_t cookie, uint64_t cooki
         RPCSerializer_InitCall(&s,
             PREP_RPC_CALL(NFS_PROGRAM, 3, NFS_READDIR_PROCEDURE));
 
-    // RPCSerializer_PushNullAuth(&s);
-
+    RPCSerializer_PushCookedAuth2(&s);
+/*
     const uint32_t uid = 0;
     const uint32_t gid = 0;
     const uint32_t n_aux_gids = 0;
@@ -672,7 +672,7 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir, uint64_t cookie, uint64_t cooki
 
     RPCSerializer_PushUnixAuth(&s,
         RandomXid(), "bongo_pc", uid, gid, n_aux_gids, aux_gids);
-
+*/
     uint32_t length = 0;
     for(int i = 0; i < 8;i++)
     {
@@ -711,6 +711,8 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir, uint64_t cookie, uint64_t cooki
     _Bool accepted = (*readPtr++) == 0;
 
     SkipAuth(&readPtr);
+
+    _Bool accept_state = (*readPtr++) == 0;
 
     nfsstat3 status = htonl(*readPtr++);
     printf("Status: %s\n", nfsstat3_toChars(status));
