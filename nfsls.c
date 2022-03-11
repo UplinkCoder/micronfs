@@ -716,12 +716,51 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir, uint64_t cookie, uint64_t cooki
 
     nfsstat3 status = htonl(*readPtr++);
     printf("Status: %s\n", nfsstat3_toChars(status));
-
+    _Bool wentFirst = 1;
     _Bool hasAttrs = (*readPtr++) != 0;
     if (hasAttrs)
     {
-        printf("Ooook Attributes nooooo!!");
+        // Fake ReadAttributes(&readPtr);
+        // for(int i = 0; 20; )
+        if (wentFirst)
+        {
+             //skip modes
+             assert(htonl(*readPtr++) == 2); //directory
+            readPtr++;
+             assert(htonl(*readPtr++) == 11); //nlinks
+
+             assert(htonl(*readPtr++) == 501); // uid
+             assert(htonl(*readPtr++) == 1000); //gid
+            readPtr++;                         // skipSize_hi
+             assert(htonl(*readPtr++) == 4096); // size
+           readPtr++;                            // skip Used High
+             assert(htonl(*readPtr++) == 4096); // used
+
+             assert(htonl(*readPtr++) == 0); // spec1
+             assert(htonl(*readPtr++) == 0); // spec2
+             readPtr++; // fsid_high
+             readPtr++; // fsid_low
+
+             readPtr++; // fileid_high
+             readPtr++; // fileid_low
+
+             readPtr++; // atime_high
+             readPtr++; // atime_low
+
+             readPtr++; // mtime_high
+             readPtr++; // mtime_low
+
+             readPtr++; // ctime_high
+             readPtr++; // ctime_low
+        }
+        // hasAttrs = (*readPtr++) != 0;
+        wentFirst = 0;
     }
+
+    printf("%x %x %x %x\n",
+        *readPtr & 0xFF, *readPtr & 0xFF00,
+        *readPtr & 0xFF0000, *readPtr & 0xFF000000);
+
     cookie_verif_hi = htonl(*readPtr++);
     cookie_verif_lw = htonl(*readPtr++);
     for(;;)
@@ -738,9 +777,9 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir, uint64_t cookie, uint64_t cooki
         char* writePtr = str_buf;
 
         printf("File: '%s'\n", readString(&readPtr, &writePtr, name_length));
+
         cookie_hi = htonl(*readPtr++);
         cookie_lw = htonl(*readPtr++);
-        hasNext = (*readPtr++);
 
     }
     _Bool wasLastList = (*readPtr++);
