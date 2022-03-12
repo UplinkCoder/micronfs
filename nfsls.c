@@ -654,7 +654,49 @@ mountlist_t* mountd_dump(int mountd_fd)
     return result;
 }
 
-int nfs_readdir(int nfs_fd, const fhandle3* dir, uint64_t cookie, uint64_t cookieverf)
+fattr3 ReadFileAttribs(const uint32_t** readPtrP) 
+{
+    fattr3 result;
+
+    const uint32_t* readPtr = *readPtrP;
+
+    result.ftype = cast(ftype3_t) (*readPtr++) >> 24;
+    result.modes = cast(fmode3_t) htonl(*readPtr++);
+    result.nlinks = htonl(*readPtr++) //nlinks
+
+    result.uid = htonl(*readPtr++);
+    result.gid = htonl(*readPtr++);
+
+    result.size = htonl(readPtr++) << 32;
+    result.size |= htonl(readPtr++);
+
+    result.used = htonl(readPtr++) << 32;
+    result.used |= htonl(readPtr++);
+
+    result.spec1 =  htonl(*readPtr++); // spec1
+    result.spec2 =  htonl(*readPtr++); // spec2
+
+    result.fsid = htonl(readPtr++) << 32;
+    result.fsid |= htonl(readPtr++);
+
+    result.fileid = htonl(readPtr++) << 32;
+    result.fileid |= htonl(readPtr++);
+
+    result.atime.seconds  = htonl(readPtr++);
+    result.atime.nseconds = htonl(readPtr++);
+
+    result.mtime.seconds  = htonl(readPtr++);
+    result.mtime.nseconds = htonl(readPtr++);
+
+    result.ctime.seconds  = htonl(readPtr++);
+    result.ctime.neconds  = htonl(readPtr++);
+
+    *readPtrP = readPtr;
+}
+
+int nfs_readdir(int nfs_fd, const fhandle3* dir
+               , uint64_t cookie, uint64_t cookieverf
+               , _Bool (*dirIter)(const char* fName, uint64_t fileId) )
 {
     RPCSerializer s = {0};
     mountlist_t* result = 0;
@@ -663,16 +705,16 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir, uint64_t cookie, uint64_t cooki
         RPCSerializer_InitCall(&s,
             PREP_RPC_CALL(NFS_PROGRAM, 3, NFS_READDIR_PROCEDURE));
 
-    RPCSerializer_PushCookedAuth2(&s);
-/*
+    // RPCSerializer_PushCookedAuth2(&s);
+
     const uint32_t uid = 0;
     const uint32_t gid = 0;
-    const uint32_t n_aux_gids = 0;
-    const uint32_t aux_gids[] = {};
+    const uint32_t n_aux_gids = 1;
+    const uint32_t aux_gids[] = {0};
 
     RPCSerializer_PushUnixAuth(&s,
         RandomXid(), "bongo_pc", uid, gid, n_aux_gids, aux_gids);
-*/
+
     uint32_t length = 0;
     for(int i = 0; i < 8;i++)
     {
@@ -724,34 +766,7 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir, uint64_t cookie, uint64_t cooki
         // for(int i = 0; 20; )
         if (wentFirst)
         {
-             //skip modes
-             assert(htonl(*readPtr++) == 2); //directory
-            readPtr++;
-             assert(htonl(*readPtr++) == 11); //nlinks
-
-             assert(htonl(*readPtr++) == 501); // uid
-             assert(htonl(*readPtr++) == 1000); //gid
-            readPtr++;                         // skipSize_hi
-             assert(htonl(*readPtr++) == 4096); // size
-           readPtr++;                            // skip Used High
-             assert(htonl(*readPtr++) == 4096); // used
-
-             assert(htonl(*readPtr++) == 0); // spec1
-             assert(htonl(*readPtr++) == 0); // spec2
-             readPtr++; // fsid_high
-             readPtr++; // fsid_low
-
-             readPtr++; // fileid_high
-             readPtr++; // fileid_low
-
-             readPtr++; // atime_high
-             readPtr++; // atime_low
-
-             readPtr++; // mtime_high
-             readPtr++; // mtime_low
-
-             readPtr++; // ctime_high
-             readPtr++; // ctime_low
+            ReadFileAttribs(&readPtr);
         }
         // hasAttrs = (*readPtr++) != 0;
         wentFirst = 0;
@@ -773,17 +788,21 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir, uint64_t cookie, uint64_t cooki
 
         uint32_t name_length = htonl(*readPtr++);
 
+        uint64_t fileId64 = fileIdHi << 32 | fileIdLw;
+
         char str_buf[1024];
         char* writePtr = str_buf;
 
-        printf("File: '%s'\n", readString(&readPtr, &writePtr, name_length));
+        const char* fname = readString(&readPtr, &writePtr, name_length);
 
         cookie_hi = htonl(*readPtr++);
         cookie_lw = htonl(*readPtr++);
-
+        if (dirIter(fname, fileId64))
+            break;
     }
     _Bool wasLastList = (*readPtr++);
 
+    return !wasLastList;
     // printf("%x %x %x %x", *readPtr++, *readPtr++, *readPtr++, *readPtr++);
 
 }
@@ -791,6 +810,11 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir, uint64_t cookie, uint64_t cooki
 #ifndef _WIN32
 #  define INVALID_SOCKET -1
 #endif
+
+int myCallBack(const char* filename, uint64_t fileId)
+{
+    return 0;
+}
 
 int main(int argc, char* argv[])
 {
@@ -858,7 +882,7 @@ int main(int argc, char* argv[])
     printFileHandle(&fh);
 
     int nfs_fd = connect_name("192.168.178.26", "2049");
-    void* rddir = nfs_readdir(nfs_fd, &fh, 0, 0);
+    void* rddir = nfs_readdir(nfs_fd, &fh, 0, 0, myCallBack);
 
     mountd_umnt(mountd_fd, "/nfs/git");
 

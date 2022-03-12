@@ -1,3 +1,5 @@
+#include <stdint.h>
+
 typedef enum nfsstat3 {
     NFS3ERR_OK          = 0,
     NFS3ERR_PERM        = 1,
@@ -101,3 +103,37 @@ const char* ftype3_toChars(ftype3 self);
 const char* stable_how_toChars(stable_how self);
 const char* mountstat3_toChars(mountstat3 self);
 const char* nlm4_stats_toChars(nlm4_stats self);
+
+typedef uint32_t uid3;
+typedef uint32_t gid3;
+typedef uint64_t size3;
+typedef uint64_t offset3;
+typedef uint32_t mode3;
+typedef uint64_t fileid3;
+typedef uint64_t cookie3;
+
+typedef struct nfstime3 {
+    uint32_t   seconds;
+    uint32_t   nseconds;
+} nfstime3;
+
+typedef struct specdata3 {
+    uint32_t   spec1;
+    uint32_t   spec2;
+} specdata3;
+
+typedef struct fattr3 {
+    ftype3     type;
+    mode3      mode;
+    uint32_t   nlink;
+    uid3       uid;
+    gid3       gid;
+    size3      size;
+    size3      used;
+    specdata3  rdev;
+    uint64_t   fsid;
+    fileid3    fileid;
+    nfstime3   atime;
+    nfstime3   mtime;
+    nfstime3   ctime;
+} fattr3;
