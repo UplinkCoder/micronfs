@@ -118,8 +118,8 @@ typedef struct nfstime3 {
 } nfstime3;
 
 typedef struct specdata3 {
-    uint32_t   spec1;
-    uint32_t   spec2;
+    uint32_t   specdata1;
+    uint32_t   specdata2;
 } specdata3;
 
 typedef struct fattr3 {

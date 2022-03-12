@@ -208,11 +208,11 @@ void RPCSerializer_PushNullAuth(RPCSerializer* self)
 }
 #define ALIGN4(VAR) (((VAR) + 3) & ~3)
 
- // (&s, RandomXid(), "my-pc", uid, gid, n_aux_gids, aux_gids);
 void RPCSerializer_PushString(RPCSerializer* self,
                               uint32_t length, const char* str)
 {
     const uint32_t n_bytes = ALIGN4(length);
+    RPCSerializer_EnsureSize(self, n_bytes + 4);
 
     RPCSerializer_PushU32(self, length);
     char* strWritePtr = self->WritePtr;
@@ -264,6 +264,11 @@ void RPCSerializer_PushUnixAuth(RPCSerializer* self,
 
     RPCSerializer_PushU32(self, 0);
     RPCSerializer_PushU32(self, 0);
+}
+
+void RPCSerializer_PushUnixAuthN(RPCSerializer* self)
+{
+    RPCSerializer_PushUnixAuth(self, 0, "", 0, 0, 1, (uint32_t[1]){0});
 }
 
 void RPCSerializer_PushCookedAuth2(RPCSerializer* self)
@@ -660,36 +665,40 @@ fattr3 ReadFileAttribs(const uint32_t** readPtrP)
 
     const uint32_t* readPtr = *readPtrP;
 
-    result.ftype = cast(ftype3_t) (*readPtr++) >> 24;
-    result.modes = cast(fmode3_t) htonl(*readPtr++);
-    result.nlinks = htonl(*readPtr++) //nlinks
+    result.type  = (ftype3) htonl(*readPtr++);
+    result.mode  = (mode3) htonl(*readPtr++);
+    result.nlink = htonl(*readPtr++);
 
     result.uid = htonl(*readPtr++);
     result.gid = htonl(*readPtr++);
 
-    result.size = htonl(readPtr++) << 32;
-    result.size |= htonl(readPtr++);
+    result.size = htonl(*readPtr++);
+    result.size <<= 32;
+    result.size |= htonl(*readPtr++);
 
-    result.used = htonl(readPtr++) << 32;
-    result.used |= htonl(readPtr++);
+    result.used = htonl(*readPtr++);
+    result.used <<= 32;
+    result.used |= htonl(*readPtr++);
 
-    result.spec1 =  htonl(*readPtr++); // spec1
-    result.spec2 =  htonl(*readPtr++); // spec2
+    result.rdev.specdata1 = htonl(*readPtr++); // spec1
+    result.rdev.specdata2 = htonl(*readPtr++); // spec2
 
-    result.fsid = htonl(readPtr++) << 32;
-    result.fsid |= htonl(readPtr++);
+    result.fsid = htonl(*readPtr++);
+    result.fsid <<= 32;
+    result.fsid |= htonl(*readPtr++);
 
-    result.fileid = htonl(readPtr++) << 32;
-    result.fileid |= htonl(readPtr++);
+    result.fileid = htonl(*readPtr++);
+    result.fileid <<= 32;
+    result.fileid |= htonl(*readPtr++);
 
-    result.atime.seconds  = htonl(readPtr++);
-    result.atime.nseconds = htonl(readPtr++);
+    result.atime.seconds  = htonl(*readPtr++);
+    result.atime.nseconds = htonl(*readPtr++);
 
-    result.mtime.seconds  = htonl(readPtr++);
-    result.mtime.nseconds = htonl(readPtr++);
+    result.mtime.seconds  = htonl(*readPtr++);
+    result.mtime.nseconds = htonl(*readPtr++);
 
-    result.ctime.seconds  = htonl(readPtr++);
-    result.ctime.neconds  = htonl(readPtr++);
+    result.ctime.seconds   = htonl(*readPtr++);
+    result.ctime.nseconds  = htonl(*readPtr++);
 
     *readPtrP = readPtr;
 }
@@ -705,15 +714,7 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir
         RPCSerializer_InitCall(&s,
             PREP_RPC_CALL(NFS_PROGRAM, 3, NFS_READDIR_PROCEDURE));
 
-    // RPCSerializer_PushCookedAuth2(&s);
-
-    const uint32_t uid = 0;
-    const uint32_t gid = 0;
-    const uint32_t n_aux_gids = 1;
-    const uint32_t aux_gids[] = {0};
-
-    RPCSerializer_PushUnixAuth(&s,
-        RandomXid(), "bongo_pc", uid, gid, n_aux_gids, aux_gids);
+    RPCSerializer_PushUnixAuthN(&s);
 
     uint32_t length = 0;
     for(int i = 0; i < 8;i++)
@@ -811,7 +812,7 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir
 #  define INVALID_SOCKET -1
 #endif
 
-int myCallBack(const char* filename, uint64_t fileId)
+_Bool myCallBack(const char* filename, uint64_t fileId)
 {
     return 0;
 }
