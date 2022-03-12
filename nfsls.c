@@ -171,7 +171,7 @@ uint16_t portmap_getport(int sock_fd,
     RPCSerializer_Send(&s, sock_fd);
 
     int sz_read =
-        read(sock_fd, recvbuffer, sizeof(recvbuffer));
+        recv(sock_fd, recvbuffer, sizeof(recvbuffer), 0);
 
     const uint32_t* readPtr =
         (const uint32_t*)(recvbuffer);
@@ -205,7 +205,7 @@ portmap_dump_res* portmap_dump(int sock_fd)
     RPCSerializer_Send(&s, sock_fd);
 
     int sz_read =
-        read(sock_fd, recvbuffer, sizeof(recvbuffer));
+        recv(sock_fd, recvbuffer, sizeof(recvbuffer), 0);
 
     uint32_t* readPtr = (uint32_t*)(recvbuffer);
     uint32_t sizeField = htonl(*readPtr++);
@@ -352,26 +352,24 @@ fhandle3_t mountd_mnt(int mountd_fd, const char* dirPath)
     RPCSerializer s = {0};
     fhandle3_t result = {{0}};
 
-    uint32_t mount_dump_xid =
-        RPCSerializer_InitCall(&s,
-            PREP_RPC_CALL(MOUNT_PROGRAM, 3, MOUNT_MNT_PROCEDURE));
+    uint32_t mount_dump_xid = RPCSerializer_InitCall(&s,
+        PREP_RPC_CALL(MOUNT_PROGRAM, 3, MOUNT_MNT_PROCEDURE));
 
     //RPCSerializer_PushNullAuth(&s);
     PushUnixAuthN(&s);
 
-  uint32_t dirPathLength = strlen(dirPath);
+    uint32_t dirPathLength = strlen(dirPath);
 
     RPCSerializer_PushString(&s, dirPathLength, dirPath);
     RPCSerializer_Finalize(&s);
     RPCSerializer_Send(&s, mountd_fd);
 
     int sz_read =
-        read(mountd_fd, recvbuffer, sizeof(recvbuffer));
+        recv(mountd_fd, recvbuffer, sizeof(recvbuffer), 0);
 
     const uint32_t* readPtr = (const uint32_t*)recvbuffer;
 
     RPCHeader header = parseRPCHeader(&readPtr);
-    printf("FragmentLength: %d\n", header.size_final & ~(1 << 31));
 
     _Bool reply_accepted = (*readPtr++) == 0;
 
@@ -419,7 +417,7 @@ mountlist_t* mountd_dump(int mountd_fd)
     RPCSerializer_Send(&s, mountd_fd);
 
     int sz_read =
-        read(mountd_fd, recvbuffer, sizeof(recvbuffer));
+        recv(mountd_fd, recvbuffer, sizeof(recvbuffer), 0);
 
     assert(sz_read > (int)sizeof(RPCHeader));
 
@@ -484,7 +482,7 @@ mountlist_t* mountd_dump(int mountd_fd)
     return result;
 }
 
-fattr3 ReadFileAttribs(const uint32_t** readPtrP) 
+fattr3 ReadFileAttribs(const uint32_t** readPtrP)
 {
     fattr3 result;
 
@@ -533,14 +531,14 @@ fattr3 ReadFileAttribs(const uint32_t** readPtrP)
 static inline uint32_t fhandle3_length(const fhandle3_t* handle)
 {
     uint32_t length = 0;
-    
+
     for(int i = 0; i < 8;i++)
     {
         if (((uint32_t*)handle->fhandle3)[i] == 0)
             break;
         length += 4;
     }
-    
+
     return length;
 }
 
@@ -555,9 +553,9 @@ int nfs_readdir(int nfs_fd, const fhandle3_t* dir
         RPCSerializer_InitCall(&s,
             PREP_RPC_CALL(NFS_PROGRAM, 3, NFS_READDIR_PROCEDURE));
 
-  PushUnixAuthN(&s);
+    PushUnixAuthN(&s);
 
-    
+
     int length = fhandle3_length(dir);
     RPCSerializer_PushString(&s, length, (const char*)dir->fhandle3);
 
@@ -579,7 +577,7 @@ int nfs_readdir(int nfs_fd, const fhandle3_t* dir
     RPCSerializer_Finalize(&s);
     RPCSerializer_Send(&s, nfs_fd);
 
-    int read_sz = read(nfs_fd, recvbuffer, sizeof(recvbuffer));
+    int read_sz = recv(nfs_fd, recvbuffer, sizeof(recvbuffer), 0);
 
     printf("read: %d bytes as reply to readdir\n", read_sz);
 
@@ -594,24 +592,14 @@ int nfs_readdir(int nfs_fd, const fhandle3_t* dir
     _Bool accept_state = (*readPtr++) == 0;
 
     nfsstat3 status = htonl(*readPtr++);
+
     printf("Status: %s\n", nfsstat3_toChars(status));
-    _Bool wentFirst = 1;
+
     _Bool hasAttrs = (*readPtr++) != 0;
     if (hasAttrs)
     {
-        // Fake ReadAttributes(&readPtr);
-        // for(int i = 0; 20; )
-        if (wentFirst)
-        {
-            ReadFileAttribs(&readPtr);
-        }
-        // hasAttrs = (*readPtr++) != 0;
-        wentFirst = 0;
+        ReadFileAttribs(&readPtr);
     }
-
-    printf("%x %x %x %x\n",
-        *readPtr & 0xFF, *readPtr & 0xFF00,
-        *readPtr & 0xFF0000, *readPtr & 0xFF000000);
 
     cookie_verif_hi = htonl(*readPtr++);
     cookie_verif_lw = htonl(*readPtr++);
@@ -741,7 +729,7 @@ int main(int argc, char* argv[])
     // send request
 
     // read reply
-    int sz = read(nfs_fd, recvbuffer, MAX_BUFFER_SIZE);
+    int sz = recv(nfs_fd, recvbuffer, MAX_BUFFER_SIZE, 0);
 
     printf ("We've got %d bytes yay\n", sz);
     close(nfs_fd);

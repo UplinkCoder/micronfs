@@ -1,9 +1,11 @@
 #include "rpc_serializer.h"
 #include <string.h>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <winsock2.h>
 #else
-# include <unistd.h>
+#include <sys/socket.h>
+typedef int SOCKET;
 #endif
 
 void RPCSerializer_Init(RPCSerializer* self, uint8_t* Buffer, uint32_t sz)
@@ -97,14 +99,9 @@ void RPCSerializer_PushUnixAuth(RPCSerializer* self,
     RPCSerializer_PushU32(self, 0);
 }
 
-int RPCSerializer_Send(RPCSerializer* self, int sock_fd)
+int RPCSerializer_Send(RPCSerializer* self, SOCKET sock_fd)
 {
-    int sz_send = write(sock_fd, self->BufferPtr, self->Size + sizeof(u32));
-#ifdef _WIN32
-    _commit(sock_fd);
-#else
-    fsync(sock_fd);
-#endif
+    int sz_send = send(sock_fd, self->BufferPtr, self->Size + sizeof(u32), 0);
     // printf("send: %d of %d bytes out\n", sz_send, self->Size);
     return sz_send;
 }
