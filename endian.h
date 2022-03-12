@@ -1,7 +1,6 @@
 #ifndef __ENDIAN_H_
 #define __ENDIAN_H_
 
-#include <endian.h>
 #include <stdint.h>
 
 #define NTOHL HTONL
@@ -18,14 +17,6 @@
 #        endif
 #    elif defined(_WIN32)
 #        define ENDIAN_IS_LITTLE
-#    else
-#       if __BYTE_ORDER == __LITTLE_ENDIAN
-#           define ENDIAN_IS_LITTLE
-#       elif __BYTE_ORDER == __BIG_ENDIAN
-#           define ENDIAN_IS_BIG
-#       else
-#            error "endian.h support little or big endian only."
-#       endif
 #    endif
 #endif
 

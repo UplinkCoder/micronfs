@@ -3,6 +3,7 @@
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #  pragma comment(lib, "ws2_32.lib")
+#  include "stdint_msvc.h"
 #else
 #  include <sys/socket.h>
 #  include <netinet/in.h>
@@ -30,17 +31,7 @@ struct sockaddr_in s_client;
 
 #include "srv.h"
 #include "micronfs.h"
-
-void ByteFlip_Array(u32* array, uint32_t length)
-{
-    u32* end = array + length;
-
-    for(u32* p = array; p < end; p++)
-    {
-        *p = htonl(*p);
-    }
-}
-
+#include "rpc_serializer.h"
 
 #define HTON_RPC(RPC_STRUCT) \
     ByteFlip_Array((u32*)&(RPC_STRUCT), sizeof((RPC_STRUCT)) / sizeof(u32));
@@ -91,20 +82,6 @@ int connect_name(const char* hostname, const char* port)
 }
 
 
-uint32_t RandomXid()
-{
-    static uint32_t i = 0;
-    static const uint32_t arr[] = {
-        0x12874512,
-        0x12845512,
-        0x12874235,
-        0x12874232,
-        0x12882513
-    };
-
-    return arr[i++ % sizeof(arr)];
-}
-
 typedef struct portmap_dump_res {
     u32 program;
     u32 version_;
@@ -113,181 +90,12 @@ typedef struct portmap_dump_res {
     struct portmap_dump_res* next;
 } portmap_dump_res;
 
-typedef struct RPCSerializer
-{
-    uint8_t* WritePtr;
-    uint8_t* BufferPtr;
 
-    uint32_t Size;
-    uint32_t MaxSize;
-} RPCSerializer;
-
-#define PREP_RPC_CALL_XID(PROG, PROG_VER, PROC, XID) \
-    (RPCCall) { \
-        .header = (RPCHeader) { \
-            .size_final = 0, \
-            .xid = XID, \
-            .reply = MESSAGE_TYPE_CALL \
-        }, \
-        .rpc_version = 2, \
-        .program_id = PROG, \
-        .program_ver = PROG_VER, \
-        .procedure = PROC, \
-    }
-
-#define PLACEHOLDER_XID 0x1234ABCD
-#define PREP_RPC_CALL(PROG, PROG_VER, PROC) \
-    PREP_RPC_CALL_XID(PROG, PROG_VER, PROC, PLACEHOLDER_XID)
-
-void RPCSerializer_Finalize(RPCSerializer* self)
-{
-    RPCHeader* header = (RPCHeader*)self->BufferPtr;
-    _Bool last_package = 1;
-    header->size_final = htonl(self->Size | (last_package << 31));
-}
-
-void RPCSerializer_Init(RPCSerializer* self, uint8_t* Buffer, uint32_t sz)
-{
-    self->BufferPtr = (uint8_t*) malloc(sz);
-    self->WritePtr = (uint8_t*) (self->BufferPtr + 4);
-
-    self->MaxSize = sz;
-    self->Size = 0;
-}
-#define CALL_DEFAULT_SIZE 1024
-
-/// Retruns: Xid for the call in host order
-static inline uint32_t RPCSerializer_InitCall(RPCSerializer* self,  RPCCall q)
-{
-    if (!self->WritePtr)
-    {
-        self->BufferPtr = malloc(CALL_DEFAULT_SIZE);
-        self->MaxSize = CALL_DEFAULT_SIZE;
-        self->WritePtr = self->BufferPtr + sizeof(RPCCall);
-    }
-
-    uint32_t xid = q.header.xid;
-    if (xid == PLACEHOLDER_XID)
-        xid = q.header.xid = RandomXid();
-
-    self->Size = sizeof(RPCCall) - sizeof(u32);
-    (*(RPCCall*)self->BufferPtr) =  q;
-    ByteFlip_Array((uint32_t*)self->BufferPtr, sizeof(RPCCall) / sizeof(u32));
-
-    return xid;
-}
-
-void RPCSerilizer_Reset(RPCSerializer* self)
-{
-    self->BufferPtr -= (self->Size + sizeof(u32));
-    self->Size = 0;
-}
-
-void RPCSerializer_EnsureSize(RPCSerializer* self, uint32_t sz)
-{
-    assert(self->Size + sz < self->MaxSize);
-}
-
-void RPCSerializer_PushU32(RPCSerializer* self, uint32_t value)
-{
-    RPCSerializer_EnsureSize(self, 4);
-    (*(uint32_t*)self->WritePtr) = htonl(value);
-    self->WritePtr += 4;
-    self->Size += 4;
-}
-
-void RPCSerializer_PushNullAuth(RPCSerializer* self)
-{
-    uint32_t* WritePtr = (uint32_t*) self->WritePtr;
-    *WritePtr++ = 0;
-    *WritePtr++ = 0;
-    *WritePtr++ = 0;
-    *WritePtr++ = 0;
-    self->Size += 4 * sizeof(u32);
-    self->WritePtr = (uint8_t*) WritePtr;
-}
-#define ALIGN4(VAR) (((VAR) + 3) & ~3)
-
-void RPCSerializer_PushString(RPCSerializer* self,
-                              uint32_t length, const char* str)
-{
-    const uint32_t n_bytes = ALIGN4(length);
-    RPCSerializer_EnsureSize(self, n_bytes + 4);
-
-    RPCSerializer_PushU32(self, length);
-    char* strWritePtr = self->WritePtr;
-    self->WritePtr += n_bytes;
-    self->Size += n_bytes;
-
-    for(int i = 0; i < length; i++)
-    {
-        *strWritePtr++ = str[i];
-    }
-}
-
-void RPCSerializer_PushU32Array(RPCSerializer *self, uint32_t n_elements, const uint32_t array[])
-{
-    RPCSerializer_PushU32(self, n_elements);
-    for(int i = 0; i < n_elements; i++)
-    {
-        RPCSerializer_PushU32(self, array[i]);
-    }
-}
-
-uint32_t ComputeAuthSize(uint32_t string_length, uint32_t n_aux_gids)
-{
-    return 4 + 4 + ALIGN4(string_length)
-            + 4 + 4 + 4 + (n_aux_gids * 4);
-}
-
-void RPCSerializer_PushUnixAuth(RPCSerializer* self,
-                                uint32_t stamp,
-                                const char* machine_name,
-                                uint32_t uid, uint32_t gid,
-                                const uint32_t n_aux_gids, const uint32_t aux_gids[])
-{
-    uint32_t name_size = strlen(machine_name);
-    uint32_t auth_size = ComputeAuthSize(name_size, n_aux_gids);
-
-    RPCSerializer_EnsureSize(self, auth_size);
-
-    RPCSerializer_PushU32(self, 1);
-    RPCSerializer_PushU32(self, auth_size);
-    RPCSerializer_PushU32(self, stamp);
-
-    RPCSerializer_PushString(self, name_size, machine_name);
-    RPCSerializer_PushU32(self, uid);
-    RPCSerializer_PushU32(self, gid);
-
-    RPCSerializer_PushU32Array(self, n_aux_gids, aux_gids);
-    // NONE VERIFIER
-
-    RPCSerializer_PushU32(self, 0);
-    RPCSerializer_PushU32(self, 0);
-}
-
-void RPCSerializer_PushUnixAuthN(RPCSerializer* self)
+void PushUnixAuthN(RPCSerializer* self)
 {
     RPCSerializer_PushUnixAuth(self, 0, "", 0, 0, 1, (uint32_t[1]){0});
 }
 
-void RPCSerializer_PushCookedAuth2(RPCSerializer* self)
-{
-    uint32_t cooked_array[] = {4, 24, 27, 30, 46, 108, 124, 132, 134, 1000};
-    RPCSerializer_PushUnixAuth(self, 0x01063ed3, "uplink-black", 1000, 1000, 10, cooked_array);
-}
-
-int RPCSerializer_Send(RPCSerializer* self, int sock_fd)
-{
-    int sz_send = write(sock_fd, self->BufferPtr, self->Size + sizeof(u32));
-#ifdef _WIN32
-    _commit(sock_fd);
-#else
-    fsync(sock_fd);
-#endif
-    // printf("send: %d of %d bytes out\n", sz_send, self->Size);
-    return sz_send;
-}
 
 #define PORTMAP_PROGRAM         100000
 #define PORTMAP_DUMP_PROCEDURE       4
@@ -301,6 +109,7 @@ int RPCSerializer_Send(RPCSerializer* self, int sock_fd)
 
 #define NFS_PROGRAM             100003
 #define NFS_READDIR_PROCEDURE       16
+#define NFS_READDIRPLUS_PROCEDURE   17
 #define MESSAGE_TYPE_CALL 0
 #define PROTO_TCP 6
 
@@ -454,10 +263,10 @@ portmap_dump_res* portmap_dump(int sock_fd)
     return result;
 }
 
-typedef struct fhandle3
+typedef struct fhandle3_t
 {
-    uint8_t handleData[64];
-} fhandle3;
+    uint8_t fhandle3[64];
+} fhandle3_t;
 
 typedef struct mountlist_t {
     const char* hostname;
@@ -489,9 +298,9 @@ const char* readString(const uint32_t ** readPtrP,
     return result;
 }
 
-fhandle3 readFileHandle(const uint32_t ** readPtrP)
+fhandle3_t readFileHandle(const uint32_t ** readPtrP)
 {
-    fhandle3 result = {{0}};
+    fhandle3_t result = {{0}};
 
     const uint32_t* readPtr = *readPtrP;
 
@@ -503,23 +312,23 @@ fhandle3 readFileHandle(const uint32_t ** readPtrP)
 
     for(int i = 0; i < length; i++)
     {
-        result.handleData[i] = *fhReadPtr++;
+        result.fhandle3[i] = *fhReadPtr++;
     }
 
     return result;
 }
 
-void printFileHandle(const fhandle3* handle)
+void printFileHandle(const fhandle3_t* handle)
 {
     const uint32_t* ptr = (const uint32_t*)
-        &handle->handleData[0];
+        &handle->fhandle3[0];
 
     printf("fh: %x %x %x %x %x %x %x %x\n",
         ptr[0], ptr[1], ptr[2], ptr[3],
         ptr[4], ptr[5], ptr[6], ptr[7]);
 }
 
-fhandle3 mountd_umnt(int mountd_fd, const char* dirPath)
+void mountd_umnt(int mountd_fd, const char* dirPath)
 {
     RPCSerializer s = {0};
     mountlist_t* result = 0;
@@ -538,18 +347,17 @@ fhandle3 mountd_umnt(int mountd_fd, const char* dirPath)
     // not sure if I should issue a read since it's a void proc
 }
 
-fhandle3 mountd_mnt(int mountd_fd, const char* dirPath)
+fhandle3_t mountd_mnt(int mountd_fd, const char* dirPath)
 {
     RPCSerializer s = {0};
-    fhandle3 result = {{0}};
+    fhandle3_t result = {{0}};
 
     uint32_t mount_dump_xid =
         RPCSerializer_InitCall(&s,
             PREP_RPC_CALL(MOUNT_PROGRAM, 3, MOUNT_MNT_PROCEDURE));
 
     //RPCSerializer_PushNullAuth(&s);
-    RPCSerializer_PushCookedAuth2(&s);
-
+    PushUnixAuthN(&s);
 
   uint32_t dirPathLength = strlen(dirPath);
 
@@ -579,6 +387,24 @@ fhandle3 mountd_mnt(int mountd_fd, const char* dirPath)
     return result;
 }
 
+
+/*
+ *       struct READDIR3args {
+           nfs_fh3      dir;
+           cookie3      cookie;
+           cookieverf3  cookieverf;
+           count3       count;
+      };
+*/
+/*
+      struct READDIRPLUS3args {
+           nfs_fh3      dir;
+           cookie3      cookie;
+           cookieverf3  cookieverf;
+           count3       dircount;
+           count3       maxcount;
+      };
+*/
 mountlist_t* mountd_dump(int mountd_fd)
 {
     RPCSerializer s = {0};
@@ -607,10 +433,9 @@ mountlist_t* mountd_dump(int mountd_fd)
     nfsstat3 status = htonl(*readPtr++);
     // now the actual params come ...
 
-    char* mountlist_storage =
-        malloc(8192 + sizeof(mountlist_t));
+    static char mountlist_storage[8192];
     char* writePtr = mountlist_storage;
-    uint32_t storage_left = 8192;
+    uint32_t storage_left = sizeof(mountlist_storage);
 
     _Bool hadPrev = 0;
     if (status == 0)
@@ -701,10 +526,26 @@ fattr3 ReadFileAttribs(const uint32_t** readPtrP)
     result.ctime.nseconds  = htonl(*readPtr++);
 
     *readPtrP = readPtr;
+
+    return result;
 }
 
-int nfs_readdir(int nfs_fd, const fhandle3* dir
-               , uint64_t cookie, uint64_t cookieverf
+static inline uint32_t fhandle3_length(const fhandle3_t* handle)
+{
+    uint32_t length = 0;
+    
+    for(int i = 0; i < 8;i++)
+    {
+        if (((uint32_t*)handle->fhandle3)[i] == 0)
+            break;
+        length += 4;
+    }
+    
+    return length;
+}
+
+int nfs_readdir(int nfs_fd, const fhandle3_t* dir
+               , uint64_t *cookie, uint64_t *cookieverf
                , _Bool (*dirIter)(const char* fName, uint64_t fileId) )
 {
     RPCSerializer s = {0};
@@ -714,23 +555,18 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir
         RPCSerializer_InitCall(&s,
             PREP_RPC_CALL(NFS_PROGRAM, 3, NFS_READDIR_PROCEDURE));
 
-    RPCSerializer_PushUnixAuthN(&s);
+  PushUnixAuthN(&s);
 
-    uint32_t length = 0;
-    for(int i = 0; i < 8;i++)
-    {
-        if (((uint32_t*)dir->handleData)[i] == 0)
-            break;
-        length += 4;
-    }
+    
+    int length = fhandle3_length(dir);
+    RPCSerializer_PushString(&s, length, (const char*)dir->fhandle3);
 
-    RPCSerializer_PushString(&s, length, (const char*)dir->handleData);
+    //TODO get rid of Endian specific code below
+    uint32_t cookie_hi = *cookie >> 32;
+    uint32_t cookie_lw = *cookie & UINT32_MAX;
 
-    uint32_t cookie_hi = cookie >> 32;
-    uint32_t cookie_lw = cookie & UINT32_MAX;
-
-    uint32_t cookie_verif_hi = cookieverf >> 32;
-    uint32_t cookie_verif_lw = cookieverf & UINT32_MAX;
+    uint32_t cookie_verif_hi = *cookieverf >> 32;
+    uint32_t cookie_verif_lw = *cookieverf & UINT32_MAX;
 
     RPCSerializer_PushU32(&s, cookie_hi);
     RPCSerializer_PushU32(&s, cookie_lw);
@@ -789,7 +625,9 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir
 
         uint32_t name_length = htonl(*readPtr++);
 
-        uint64_t fileId64 = fileIdHi << 32 | fileIdLw;
+        fileid3 fileId = fileIdHi;
+        fileId <<= 32;
+        fileId |= fileIdLw;
 
         char str_buf[1024];
         char* writePtr = str_buf;
@@ -798,7 +636,7 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir
 
         cookie_hi = htonl(*readPtr++);
         cookie_lw = htonl(*readPtr++);
-        if (dirIter(fname, fileId64))
+        if (dirIter(fname, fileId))
             break;
     }
     _Bool wasLastList = (*readPtr++);
@@ -879,11 +717,17 @@ int main(int argc, char* argv[])
              m->hostname,  m->directory);
     }
 
-    fhandle3 fh = mountd_mnt(mountd_fd, "/nfs/git");
+    fhandle3_t fh = mountd_mnt(mountd_fd, "/nfs/git");
     printFileHandle(&fh);
 
     int nfs_fd = connect_name("192.168.178.26", "2049");
-    void* rddir = nfs_readdir(nfs_fd, &fh, 0, 0, myCallBack);
+    cookie3 cookie = 0;
+    cookie3 verifier = 0;
+
+    _Bool read_more = nfs_readdir(nfs_fd, &fh
+          , &cookie, &verifier
+          , myCallBack
+    );
 
     mountd_umnt(mountd_fd, "/nfs/git");
 

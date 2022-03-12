@@ -112,6 +112,7 @@ typedef uint32_t mode3;
 typedef uint64_t fileid3;
 typedef uint64_t cookie3;
 
+#pragma pack(push, 1)
 typedef struct nfstime3 {
     uint32_t   seconds;
     uint32_t   nseconds;
@@ -137,3 +138,4 @@ typedef struct fattr3 {
     nfstime3   mtime;
     nfstime3   ctime;
 } fattr3;
+#pragma pack(pop)
