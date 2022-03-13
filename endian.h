@@ -15,9 +15,16 @@
 #        else
 #            error "endian.h support little or big endian only."
 #        endif
-#    elif defined(_WIN32)
+#   elif defined(_WIN32)
 #        define ENDIAN_IS_LITTLE
-#    endif
+#   else
+#       include <endian.h>
+#       if __BYTE_ORDER == __LITTLE_ENDIAN
+#           define ENDIAN_IS_LITTLE
+#       elif __BYTE_ORDER == __BIG_ENDIAN
+#           define ENDIAN_IS_BIG
+#       endif
+#   endif
 #endif
 
 #ifdef ENDIAN_IS_LITTLE
