@@ -39,16 +39,6 @@
   |  (((VAL) & 0xff00) << 8) \
   |  (((VAL) >> 8) & 0xff00))
 
-#define HTONLL(VAL) \
-    (((uint64_t)(VAL) << 56) | \
-    (((uint64_t)(VAL) << 40) & 0xff000000000000ULL) | \
-    (((uint64_t)(VAL) << 24) & 0xff0000000000ULL) | \
-    (((uint64_t)(VAL) << 8)  & 0xff00000000ULL) | \
-    (((uint64_t)(VAL) >> 8)  & 0xff000000ULL) | \
-    (((uint64_t)(VAL) >> 24) & 0xff0000ULL) | \
-    (((uint64_t)(VAL) >> 40) & 0xff00ULL) | \
-    ((uint64_t)(VAL)  >> 56))
-
 #elif ENDIAN_IS_BIG
 
 #define HTONS(VAL) \
