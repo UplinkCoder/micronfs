@@ -116,14 +116,12 @@ void RPCDeserializer_Init(RPCDeserializer* self, SOCKET sock_fd)
 RPCHeader RPCDeserializer_RecvHeader(RPCDeserializer* self)
 {
     self->Size = recv(self->SockFd, self->BufferPtr, self->MaxBuffer, 0);
-    printf("recv size: %d\n", self->Size);
     assert(self->Size >= sizeof(RPCHeader));
 
     const uint32_t size_final = HTONL(*self->ReadPtr); self->ReadPtr++;
     const uint32_t xid = HTONL(*self->ReadPtr); self->ReadPtr++;
     const int reply = (*self->ReadPtr++) != 0;
     self->FragmentSize = (size_final & ~(1 << 31));
-    printf("fragment size: %d\n", self->FragmentSize);
     return (RPCHeader){size_final, xid, reply};
 }
 
@@ -187,10 +185,8 @@ fhandle3 RPCDeserializer_ReadFileHandle(RPCDeserializer* self)
     for(int i = 0; i < length; i++)
     {
         result.fhandle3[i] = *fhReadPtr++;
-        printf(" %x ", result.fhandle3[i]);
 
     }
-    printf("FileHandleLength: %d\n", length);
 
     return result;
 }
