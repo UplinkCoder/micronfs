@@ -43,7 +43,7 @@ typedef struct RPCSerializer
 
 typedef struct RPCDeserializer
 {
-    uint32_t* ReadPtr;
+    const uint32_t* ReadPtr;
     uint8_t* BufferPtr;
 
     /* amount of message unread */
@@ -52,7 +52,7 @@ typedef struct RPCDeserializer
     uint32_t FragmentSize;
     uint32_t MaxBuffer;
 
-    uint8_t InlineStorage[2048];
+    uint8_t InlineStorage[1460];
 } RPCDeserializer;
 
 
@@ -151,7 +151,7 @@ static inline void RPCSerializer_PushU32(RPCSerializer* self, uint32_t value)
     self->Size += 4;
 }
 
-static inline uint32_t RPCDeserializer_ReadU32(RPCDeserializer* self)
+static inline const uint32_t RPCDeserializer_ReadU32(RPCDeserializer* self)
 {
     const uint32_t result = HTONL(*self->ReadPtr);
     self->ReadPtr++;
@@ -168,10 +168,11 @@ RPCHeader RPCDeserializer_RecvHeader(RPCDeserializer* self);
 void RPCDeserializer_SkipAuth(RPCDeserializer *self);
 
 const char* RPCDeserializer_ReadString(RPCDeserializer* self
-                                    , const char ** writePtr, uint32_t length);
+                                    , char ** writePtr, uint32_t length);
 
 fhandle3 RPCDeserializer_ReadFileHandle(RPCDeserializer* self);
 fattr3 RPCDeserializer_ReadFileAttribs(RPCDeserializer* self);
 uint64_t RPCDeserializer_ReadU64(RPCDeserializer* self);
+uint32_t RPCDeserializer_BufferLeft(RPCDeserializer* self);
 
 #define ALIGN4(VAR) (((VAR) + 3) & ~3)

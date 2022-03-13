@@ -110,18 +110,20 @@ void RPCDeserializer_Init(RPCDeserializer* self, SOCKET sock_fd)
     self->SockFd = sock_fd;
     self->BufferPtr = self->InlineStorage;
     self->MaxBuffer = sizeof(self->InlineStorage);
-    self->ReadPtr = self->InlineStorage;
+    self->ReadPtr = (const uint32_t*)self->InlineStorage;
 }
 
 RPCHeader RPCDeserializer_RecvHeader(RPCDeserializer* self)
 {
     self->Size = recv(self->SockFd, self->BufferPtr, self->MaxBuffer, 0);
+    printf("recv size: %d\n", self->Size);
     assert(self->Size >= sizeof(RPCHeader));
 
     const uint32_t size_final = HTONL(*self->ReadPtr); self->ReadPtr++;
     const uint32_t xid = HTONL(*self->ReadPtr); self->ReadPtr++;
     const int reply = (*self->ReadPtr++) != 0;
-
+    self->FragmentSize = (size_final & ~(1 << 31));
+    printf("fragment size: %d\n", self->FragmentSize);
     return (RPCHeader){size_final, xid, reply};
 }
 
@@ -152,7 +154,7 @@ void RPCDeserializer_SkipAuth(RPCDeserializer *self)
 }
 
 const char* RPCDeserializer_ReadString(RPCDeserializer* self
-                                    , const char ** writePtrP, uint32_t length)
+                                    , char ** writePtrP, uint32_t length)
 
 {
     char* writePtr = *writePtrP;
@@ -185,16 +187,24 @@ fhandle3 RPCDeserializer_ReadFileHandle(RPCDeserializer* self)
     for(int i = 0; i < length; i++)
     {
         result.fhandle3[i] = *fhReadPtr++;
-    }
+        printf(" %x ", result.fhandle3[i]);
 
+    }
+    printf("FileHandleLength: %d\n", length);
+
+    return result;
+}
+
+uint32_t RPCDeserializer_BufferLeft(RPCDeserializer* self)
+{
+    uint32_t result = self->Size -
+                      ((self->ReadPtr - (u32*)self->BufferPtr) * sizeof(u32));
     return result;
 }
 
 fattr3 RPCDeserializer_ReadFileAttribs(RPCDeserializer* self)
 {
     fattr3 result;
-
-    assert(self->MaxBuffer - (self->ReadPtr - (u32*)self->BufferPtr) >= (sizeof(result) / sizeof(u32)));
 
     const uint32_t* ReadPtr = self->ReadPtr;
 
@@ -233,7 +243,7 @@ fattr3 RPCDeserializer_ReadFileAttribs(RPCDeserializer* self)
     result.ctime.seconds   = HTONL(*ReadPtr); ReadPtr++;
     result.ctime.nseconds  = HTONL(*ReadPtr); ReadPtr++;
 
-    self->ReadPtr = ReadPtr;
+    self->ReadPtr = (const uint32_t*)ReadPtr;
 
     return result;
 }
