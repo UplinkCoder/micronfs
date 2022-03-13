@@ -151,13 +151,25 @@ static inline void RPCSerializer_PushU32(RPCSerializer* self, uint32_t value)
     self->Size += 4;
 }
 
+static inline uint32_t RPCDeserializer_ReadU32(RPCDeserializer* self)
+{
+    const uint32_t result = HTONL(*self->ReadPtr);
+    self->ReadPtr++;
+    return result;
+}
+
+static inline int RPCDeserializer_ReadBool(RPCDeserializer *self)
+{
+    return (*self->ReadPtr++ != 0);
+}
+
 void RPCDeserializer_Init(RPCDeserializer* self, SOCKET sock_fd);
 RPCHeader RPCDeserializer_RecvHeader(RPCDeserializer* self);
-int RPCDeserializer_ReadBool(RPCDeserializer *self);
 void RPCDeserializer_SkipAuth(RPCDeserializer *self);
-uint32_t RPCDeserializer_ReadU32(RPCDeserializer* self);
+
 const char* RPCDeserializer_ReadString(RPCDeserializer* self
                                     , const char ** writePtr, uint32_t length);
+
 fhandle3 RPCDeserializer_ReadFileHandle(RPCDeserializer* self);
 fattr3 RPCDeserializer_ReadFileAttribs(RPCDeserializer* self);
 uint64_t RPCDeserializer_ReadU64(RPCDeserializer* self);
