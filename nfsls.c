@@ -9,6 +9,7 @@
 #  include <netinet/in.h>
 #  include <netdb.h>
 #  include <unistd.h>
+#  include <byteswap.h>
 #  include <sys/mman.h>
 #  define _BSD_SOURCE 1
 #endif
@@ -51,7 +52,6 @@ typedef const uint32_t ** readPtrP_t;
 #endif
 #define MAX_BUFFER_SIZE 4096
 
-static char sendbuffer[MAX_BUFFER_SIZE];
 static char recvbuffer[MAX_BUFFER_SIZE];
 
 /// connects to a name on a given port
@@ -113,31 +113,6 @@ void PushUnixAuthN(RPCSerializer* self)
 #define MESSAGE_TYPE_CALL 0
 #define PROTO_TCP 6
 
-void SkipAuth(const uint32_t ** readPtrP)
-{
-    const uint32_t* readPtr = *readPtrP;
-
-    uint32_t auth_flavor = htonl(*readPtr++);
-    uint32_t length = htonl(*readPtr++);
-    // let's skip the auth whatever it is
-    u32 skipU32s = (length >> 2) + !!(length & 3);
-    readPtr += skipU32s;
-
-    *readPtrP = readPtr;
-}
-
-const RPCHeader parseRPCHeader(readPtrP_t readPtrP)
-{
-    const uint32_t* readPtr = *readPtrP;
-
-    const uint32_t size_final = htonl(*readPtr++);
-    const uint32_t xid = htonl(*readPtr++);
-    const _Bool reply = (*readPtr++) != 0;
-
-    *readPtrP = readPtr;
-
-    return (RPCHeader){size_final, xid, reply};
-}
 
 
 void portmap_nullCall(int sock_fd)
@@ -170,20 +145,19 @@ uint16_t portmap_getport(int sock_fd,
     RPCSerializer_Finalize(&s);
     RPCSerializer_Send(&s, sock_fd);
 
-    int sz_read =
-        recv(sock_fd, recvbuffer, sizeof(recvbuffer), 0);
-
-    const uint32_t* readPtr =
-        (const uint32_t*)(recvbuffer);
-    RPCHeader header = parseRPCHeader(&readPtr);
-
-    _Bool accepted = (*readPtr++) == 0;
-
-    SkipAuth(&readPtr);
+    RPCDeserializer d = {0};
+    RPCDeserializer_Init(&d, sock_fd);
+    RPCHeader header =
+        RPCDeserializer_RecvHeader(&d);
 
 
-    nfsstat3 status = htonl(*readPtr++);
-    uint32_t port = htonl(*readPtr++);
+    _Bool accepted = RPCDeserializer_ReadBool(&d);
+
+    RPCDeserializer_SkipAuth(&d);
+
+
+    nfsstat3 status = RPCDeserializer_ReadU32(&d);
+    uint32_t port = RPCDeserializer_ReadU32(&d);
     assert(port <= UINT16_MAX);
 
     return port;
@@ -204,46 +178,36 @@ portmap_dump_res* portmap_dump(int sock_fd)
     RPCSerializer_Finalize(&s);
     RPCSerializer_Send(&s, sock_fd);
 
-    int sz_read =
-        recv(sock_fd, recvbuffer, sizeof(recvbuffer), 0);
+    RPCDeserializer d = {0};
 
-    uint32_t* readPtr = (uint32_t*)(recvbuffer);
-    uint32_t sizeField = htonl(*readPtr++);
-    printf("sizeField: %x\n", sizeField);
+    RPCDeserializer_Init(&d, sock_fd);
+    RPCHeader header =
+        RPCDeserializer_RecvHeader(&d);
 
-    uint32_t size =  sizeField & ~(1 << 31);
-    _Bool final = ((sizeField & (1 << 31)) != 0);
-    uint32_t xid = htonl(*readPtr++);
 
-    _Bool reply = (*readPtr++) != 0;
+    _Bool accepted = RPCDeserializer_ReadBool(&d);
 
-    uint32_t auth_flavor = htonl(*readPtr++);
-    uint32_t length = htonl(*readPtr++);
-    // let's skip the auth whatever it is
-    u32 skipU32s = (length >> 2) + !!(length & 3);
-    readPtr += skipU32s;
+    RPCDeserializer_SkipAuth(&d);
 
-    _Bool accepted = (*readPtr++) == 0;
 
-    nfsstat3 status = htonl(*readPtr++);
-    printf("XID: %x\n", xid);
-    printf("size: %d\n", size);
+    nfsstat3 status = RPCDeserializer_ReadU32(&d);
+
     printf("Status: %s\n", nfsstat3_toChars(status));
     // now the actual params come ...
 
-    _Bool hasNext = (*readPtr++) != 0;
+    _Bool hasNext =  RPCDeserializer_ReadBool(&d);
     _Bool hadPrev = 0;
     portmap_dump_res* entry = result;
     while(hasNext)
     {
         portmap_dump_res r = {
-            .program = htonl(*readPtr++),
-            .version_ = htonl(*readPtr++),
-            .port = htonl(*readPtr++),
-            .proto = htonl(*readPtr++)
+            .program = RPCDeserializer_ReadU32(&d),
+            .version_ = RPCDeserializer_ReadU32(&d),
+            .port = RPCDeserializer_ReadU32(&d),
+            .proto = RPCDeserializer_ReadU32(&d)
         };
         // printf("read a record\n");
-        hasNext = (*readPtr++);
+        hasNext = RPCDeserializer_ReadBool(&d);
         if (r.program == MOUNT_PROGRAM
             && r.version_ == 3
             && r.proto == 6)
@@ -263,62 +227,16 @@ portmap_dump_res* portmap_dump(int sock_fd)
     return result;
 }
 
-typedef struct fhandle3_t
-{
-    uint8_t fhandle3[64];
-} fhandle3_t;
-
 typedef struct mountlist_t {
     const char* hostname;
     const char* directory;
     struct mountlist_t* next;
 } mountlist_t;
 
-const char* readString(const uint32_t ** readPtrP,
-                             char ** writePtrP,
-                       const uint32_t length)
-{
-    char* writePtr = *writePtrP;
-    const uint32_t* readPtr = *readPtrP;
-    const char* readPtrString = (const char*) readPtr;
 
-    readPtr += (length >> 2) + !!(length & 3);
-    *readPtrP = readPtr;
 
-    const char* result = (const char*)writePtr;
 
-    for(uint32_t i = 0; i < length; i++)
-    {
-        *writePtr++ = readPtrString[i];
-    }
-    *writePtr++ = '\0';
-
-    *writePtrP = writePtr;
-
-    return result;
-}
-
-fhandle3_t readFileHandle(const uint32_t ** readPtrP)
-{
-    fhandle3_t result = {{0}};
-
-    const uint32_t* readPtr = *readPtrP;
-
-    const uint32_t length = htonl(*readPtr++);
-    const uint8_t* fhReadPtr = (const uint8_t*) readPtr;
-
-    readPtr += (length >> 2) + !!(length & 3);
-    *readPtrP = readPtr;
-
-    for(int i = 0; i < length; i++)
-    {
-        result.fhandle3[i] = *fhReadPtr++;
-    }
-
-    return result;
-}
-
-void printFileHandle(const fhandle3_t* handle)
+void printFileHandle(const fhandle3* handle)
 {
     const uint32_t* ptr = (const uint32_t*)
         &handle->fhandle3[0];
@@ -347,10 +265,10 @@ void mountd_umnt(int mountd_fd, const char* dirPath)
     // not sure if I should issue a read since it's a void proc
 }
 
-fhandle3_t mountd_mnt(int mountd_fd, const char* dirPath)
+fhandle3 mountd_mnt(int mountd_fd, const char* dirPath)
 {
     RPCSerializer s = {0};
-    fhandle3_t result = {{0}};
+    fhandle3 result = {{0}};
 
     uint32_t mount_dump_xid = RPCSerializer_InitCall(&s,
         PREP_RPC_CALL(MOUNT_PROGRAM, 3, MOUNT_MNT_PROCEDURE));
@@ -364,45 +282,26 @@ fhandle3_t mountd_mnt(int mountd_fd, const char* dirPath)
     RPCSerializer_Finalize(&s);
     RPCSerializer_Send(&s, mountd_fd);
 
-    int sz_read =
-        recv(mountd_fd, recvbuffer, sizeof(recvbuffer), 0);
+    RPCDeserializer d = {0};
+    RPCDeserializer_Init(&d, mountd_fd);
 
-    const uint32_t* readPtr = (const uint32_t*)recvbuffer;
+    RPCDeserializer_RecvHeader(&d);
 
-    RPCHeader header = parseRPCHeader(&readPtr);
+    int reply_accepted = RPCDeserializer_ReadBool(&d);
 
-    _Bool reply_accepted = (*readPtr++) == 0;
+    RPCDeserializer_SkipAuth(&d);
 
-    SkipAuth(&readPtr);
+    int rpc_accepted = RPCDeserializer_ReadBool(&d);
 
-    _Bool rpc_accepted = (*readPtr++) == 0;
+    nfsstat3 status = RPCDeserializer_ReadU32(&d);
 
-    nfsstat3 status = htonl(*readPtr++);
-    printf("mnt: '%s'   status: %s\n", dirPath, nfsstat3_toChars(status));
-    //TODO we should ready the required auth here ....
-    result = readFileHandle(&readPtr);
+    result = RPCDeserializer_ReadFileHandle(&d);
+    //TODO we should ready the required auth here .... maybe
 
     return result;
+
 }
 
-
-/*
- *       struct READDIR3args {
-           nfs_fh3      dir;
-           cookie3      cookie;
-           cookieverf3  cookieverf;
-           count3       count;
-      };
-*/
-/*
-      struct READDIRPLUS3args {
-           nfs_fh3      dir;
-           cookie3      cookie;
-           cookieverf3  cookieverf;
-           count3       dircount;
-           count3       maxcount;
-      };
-*/
 mountlist_t* mountd_dump(int mountd_fd)
 {
     RPCSerializer s = {0};
@@ -416,19 +315,15 @@ mountlist_t* mountd_dump(int mountd_fd)
     RPCSerializer_Finalize(&s);
     RPCSerializer_Send(&s, mountd_fd);
 
-    int sz_read =
-        recv(mountd_fd, recvbuffer, sizeof(recvbuffer), 0);
+    RPCDeserializer d;
+    RPCDeserializer_Init(&d, mountd_fd);
+    RPCHeader header = RPCDeserializer_RecvHeader(&d);
 
-    assert(sz_read > (int)sizeof(RPCHeader));
+    _Bool accepted = RPCDeserializer_ReadBool(&d);
 
-     const uint32_t* readPtr = (const uint32_t*)(recvbuffer);
-    RPCHeader header = parseRPCHeader(&readPtr);
+    RPCDeserializer_SkipAuth(&d);
 
-    _Bool accepted = (*readPtr++) == 0;
-
-    SkipAuth(&readPtr);
-
-    nfsstat3 status = htonl(*readPtr++);
+    nfsstat3 status = RPCDeserializer_ReadU32(&d);
     // now the actual params come ...
 
     static char mountlist_storage[8192];
@@ -438,7 +333,7 @@ mountlist_t* mountd_dump(int mountd_fd)
     _Bool hadPrev = 0;
     if (status == 0)
     {
-        _Bool hasNext = ((*readPtr++) != 0);
+        _Bool hasNext = RPCDeserializer_ReadBool(&d);
         mountlist_t* entry = 0;
         if (hasNext)
         {
@@ -459,18 +354,18 @@ mountlist_t* mountd_dump(int mountd_fd)
             storage_left -= sizeof(mountlist_t);
 
             {
-                const uint32_t hlen = (htonl(*readPtr++));
+                const uint32_t hlen = RPCDeserializer_ReadU32(&d);
                 assert(storage_left > hlen + 1);
-                entry->hostname = readString(&readPtr, &writePtr, hlen);
+                entry->hostname = RPCDeserializer_ReadString(&d, &writePtr, hlen);
                 storage_left -= (hlen + 1);
             }
             {
-                uint32_t dlen = (htonl(*readPtr++));
+                uint32_t dlen = RPCDeserializer_ReadU32(&d);
                 assert(storage_left > dlen - 1);
-                entry->directory = readString(&readPtr, &writePtr, dlen);
+                entry->directory = RPCDeserializer_ReadString(&d, &writePtr, dlen);
                 storage_left -= (dlen + 1);
             }
-            hasNext = ((*readPtr++) != 0);
+            hasNext = RPCDeserializer_ReadBool(&d);
             hadPrev = 1;
         }
     }
@@ -482,53 +377,26 @@ mountlist_t* mountd_dump(int mountd_fd)
     return result;
 }
 
-fattr3 ReadFileAttribs(const uint32_t** readPtrP)
+static inline uint64_t ReadU64(const uint32_t ** readPtrP)
 {
-    fattr3 result;
+    const uint32_t * readPtr = *readPtrP;
 
-    const uint32_t* readPtr = *readPtrP;
+    const uint32_t rd_hi = *readPtr++;
+    const uint32_t hi = htonl(rd_hi);
+    const uint32_t rd_lw = *readPtr++;
+    const uint32_t lw = htonl(rd_lw);
 
-    result.type  = (ftype3) htonl(*readPtr++);
-    result.mode  = (mode3) htonl(*readPtr++);
-    result.nlink = htonl(*readPtr++);
 
-    result.uid = htonl(*readPtr++);
-    result.gid = htonl(*readPtr++);
+    uint64_t result = hi;
+    result <<= 32;
+    result |= lw;
 
-    result.size = htonl(*readPtr++);
-    result.size <<= 32;
-    result.size |= htonl(*readPtr++);
-
-    result.used = htonl(*readPtr++);
-    result.used <<= 32;
-    result.used |= htonl(*readPtr++);
-
-    result.rdev.specdata1 = htonl(*readPtr++); // spec1
-    result.rdev.specdata2 = htonl(*readPtr++); // spec2
-
-    result.fsid = htonl(*readPtr++);
-    result.fsid <<= 32;
-    result.fsid |= htonl(*readPtr++);
-
-    result.fileid = htonl(*readPtr++);
-    result.fileid <<= 32;
-    result.fileid |= htonl(*readPtr++);
-
-    result.atime.seconds  = htonl(*readPtr++);
-    result.atime.nseconds = htonl(*readPtr++);
-
-    result.mtime.seconds  = htonl(*readPtr++);
-    result.mtime.nseconds = htonl(*readPtr++);
-
-    result.ctime.seconds   = htonl(*readPtr++);
-    result.ctime.nseconds  = htonl(*readPtr++);
+    // printf("hi: %x, lw: %x, res: %llx\n", hi, lw, result);
 
     *readPtrP = readPtr;
-
-    return result;
 }
 
-static inline uint32_t fhandle3_length(const fhandle3_t* handle)
+static inline uint32_t fhandle3_length(const fhandle3* handle)
 {
     uint32_t length = 0;
 
@@ -542,15 +410,112 @@ static inline uint32_t fhandle3_length(const fhandle3_t* handle)
     return length;
 }
 
-int nfs_readdir(int nfs_fd, const fhandle3_t* dir
+int nfs_readdirplus(int nfs_fd, const fhandle3* dir
                , uint64_t *cookie, uint64_t *cookieverf
-               , _Bool (*dirIter)(const char* fName, uint64_t fileId) )
+               , int (*fileIter)(const char* fName, uint64_t fileId,
+                                 const fhandle3* handle, const fattr3* attribs) )
 {
     RPCSerializer s = {0};
+
     mountlist_t* result = 0;
 
-    uint32_t readdir_xid =
-        RPCSerializer_InitCall(&s,
+    uint32_t readdirplus_xid = RPCSerializer_InitCall(&s,
+            PREP_RPC_CALL(NFS_PROGRAM, 3, NFS_READDIRPLUS_PROCEDURE));
+
+    PushUnixAuthN(&s);
+
+    int length = fhandle3_length(dir);
+    RPCSerializer_PushString(&s, length, (const char*)dir->fhandle3);
+
+    uint32_t cookie_hi = *cookie >> 32;
+    uint32_t cookie_lw = *cookie & UINT32_MAX;
+
+    uint32_t cookie_verif_hi = *cookieverf >> 32;
+    uint32_t cookie_verif_lw = *cookieverf & UINT32_MAX;
+
+    RPCSerializer_PushU32(&s, cookie_hi);
+    RPCSerializer_PushU32(&s, cookie_lw);
+
+    RPCSerializer_PushU32(&s, cookie_verif_hi);
+    RPCSerializer_PushU32(&s, cookie_verif_lw);
+
+    RPCSerializer_PushU32(&s, 3000);
+    // max size of attribs ... it's recommeded that that's shorter than max size
+
+    RPCSerializer_PushU32(&s, 4000); // max size of result structure
+
+    RPCSerializer_Finalize(&s);
+    RPCSerializer_Send(&s, nfs_fd);
+    // --------------------------------------------------------------
+
+    RPCDeserializer d = {0};
+    RPCDeserializer_Init(&d, nfs_fd);
+
+    RPCHeader header = RPCDeserializer_RecvHeader(&d);
+
+    assert(header.xid == readdirplus_xid);
+
+    int accepted = RPCDeserializer_ReadBool(&d);  //16
+    RPCDeserializer_SkipAuth(&d);
+    int accept_state = RPCDeserializer_ReadBool(&d);
+
+    nfsstat3 status = RPCDeserializer_ReadU32(&d);
+    printf("Status: %s\n", nfsstat3_toChars(status));
+    // -------------------------------------------------------------------
+
+    int hasAttrs = RPCDeserializer_ReadBool(&d);
+    if (hasAttrs)
+    {
+        RPCDeserializer_ReadFileAttribs(&d);
+    }
+
+    *cookieverf = RPCDeserializer_ReadU64(&d);
+    cookie3 lastCookie;
+    // ---------------------------------------------------------------------
+    int hasNext = RPCDeserializer_ReadBool(&d);
+    while (hasNext)
+    {
+        char name_buffer[1024];
+        char* namePtr = name_buffer;
+        uint64_t fileid  = RPCDeserializer_ReadU64(&d);
+        uint32_t name_length = RPCDeserializer_ReadU32(&d);
+        const char* name  = RPCDeserializer_ReadString(&d, &namePtr, name_length);
+        lastCookie = RPCDeserializer_ReadU64(&d);
+        const fattr3* attribsPtr = 0;
+        if (RPCDeserializer_ReadBool(&d))
+        {
+            const fattr3 attribs = RPCDeserializer_ReadFileAttribs(&d);
+            attribsPtr = &attribs;
+        }
+        const fhandle3* handlePtr = 0;
+        if (RPCDeserializer_ReadBool(&d))
+        {
+            const fhandle3 handle = RPCDeserializer_ReadFileHandle(&d);
+            handlePtr = &handle;
+        }
+
+        if (!fileIter(name, fileid, handlePtr, attribsPtr))
+        {
+            *cookie = lastCookie;
+            break;
+        }
+        hasNext = RPCDeserializer_ReadBool(&d);
+    }
+    // printf("Writing lastCookie into ptr");
+    *cookie = lastCookie;
+    return RPCDeserializer_ReadBool(&d);
+
+}
+
+int nfs_readdir(int nfs_fd, const fhandle3* dir
+               , uint64_t *cookie, uint64_t *cookieverf
+               , int (*dirIter)(const char* fName, uint64_t fileId) )
+{
+    RPCSerializer s = {0};
+
+    mountlist_t* result = 0;
+
+    uint32_t readdir_xid = RPCSerializer_InitCall(&s,
             PREP_RPC_CALL(NFS_PROGRAM, 3, NFS_READDIR_PROCEDURE));
 
     PushUnixAuthN(&s);
@@ -559,7 +524,6 @@ int nfs_readdir(int nfs_fd, const fhandle3_t* dir
     int length = fhandle3_length(dir);
     RPCSerializer_PushString(&s, length, (const char*)dir->fhandle3);
 
-    //TODO get rid of Endian specific code below
     uint32_t cookie_hi = *cookie >> 32;
     uint32_t cookie_lw = *cookie & UINT32_MAX;
 
@@ -577,57 +541,44 @@ int nfs_readdir(int nfs_fd, const fhandle3_t* dir
     RPCSerializer_Finalize(&s);
     RPCSerializer_Send(&s, nfs_fd);
 
-    int read_sz = recv(nfs_fd, recvbuffer, sizeof(recvbuffer), 0);
+    RPCDeserializer d;
+    RPCDeserializer_Init(&d, nfs_fd);
 
-    printf("read: %d bytes as reply to readdir\n", read_sz);
-
-    const uint32_t* readPtr = (const uint32_t*)(recvbuffer);
-    RPCHeader header = parseRPCHeader(&readPtr);
-    assert(header.xid == readdir_xid);
-
-    _Bool accepted = (*readPtr++) == 0;
-
-    SkipAuth(&readPtr);
-
-    _Bool accept_state = (*readPtr++) == 0;
-
-    nfsstat3 status = htonl(*readPtr++);
+    const RPCHeader header = RPCDeserializer_RecvHeader(&d);
+    int accepted = RPCDeserializer_ReadBool(&d);  //16
+    RPCDeserializer_SkipAuth(&d);
+    int accept_state = RPCDeserializer_ReadBool(&d);
+    nfsstat3 status = RPCDeserializer_ReadU32(&d);
 
     printf("Status: %s\n", nfsstat3_toChars(status));
 
-    _Bool hasAttrs = (*readPtr++) != 0;
+    _Bool hasAttrs = RPCDeserializer_ReadBool(&d);
     if (hasAttrs)
     {
-        ReadFileAttribs(&readPtr);
+        RPCDeserializer_ReadFileAttribs(&d);
     }
 
-    cookie_verif_hi = htonl(*readPtr++);
-    cookie_verif_lw = htonl(*readPtr++);
+    *cookieverf = RPCDeserializer_ReadU64(&d);
+    cookie3 lastCookie;
     for(;;)
     {
-        _Bool hasNext = ((*readPtr++) != 0);
+        _Bool hasNext = RPCDeserializer_ReadBool(&d);
         if (!hasNext)
             break;
-        uint32_t fileIdHi = htonl(*readPtr++);
-        uint32_t fileIdLw = htonl(*readPtr++);
+        fileid3 fileId = RPCDeserializer_ReadU64(&d);
 
-        uint32_t name_length = htonl(*readPtr++);
-
-        fileid3 fileId = fileIdHi;
-        fileId <<= 32;
-        fileId |= fileIdLw;
+        uint32_t name_length = RPCDeserializer_ReadU32(&d);
 
         char str_buf[1024];
         char* writePtr = str_buf;
 
-        const char* fname = readString(&readPtr, &writePtr, name_length);
+        const char* fname = RPCDeserializer_ReadString(&d, &writePtr, name_length);
 
-        cookie_hi = htonl(*readPtr++);
-        cookie_lw = htonl(*readPtr++);
-        if (dirIter(fname, fileId))
+        lastCookie = RPCDeserializer_ReadU64(&d);
+        if (!dirIter(fname, fileId))
             break;
     }
-    _Bool wasLastList = (*readPtr++);
+    _Bool wasLastList = RPCDeserializer_ReadBool(&d);
 
     return !wasLastList;
     // printf("%x %x %x %x", *readPtr++, *readPtr++, *readPtr++, *readPtr++);
@@ -638,9 +589,16 @@ int nfs_readdir(int nfs_fd, const fhandle3_t* dir
 #  define INVALID_SOCKET -1
 #endif
 
-_Bool myCallBack(const char* filename, uint64_t fileId)
+int myPlusCallBack(const char* fName, uint64_t fileId,
+                   const fhandle3* handle, const fattr3* attribs)
 {
-    return 0;
+    printf("name: %s, fileid %ull \n", fName, fileId);
+    return 1;
+}
+
+int myCallBack(const char* filename, uint64_t fileId)
+{
+    return 1;
 }
 
 int main(int argc, char* argv[])
@@ -705,18 +663,27 @@ int main(int argc, char* argv[])
              m->hostname,  m->directory);
     }
 
-    fhandle3_t fh = mountd_mnt(mountd_fd, "/nfs/git");
+    fhandle3 fh = mountd_mnt(mountd_fd, "/nfs/git");
     printFileHandle(&fh);
 
     int nfs_fd = connect_name("192.168.178.26", "2049");
     cookie3 cookie = 0;
     cookie3 verifier = 0;
-
-    _Bool read_more = nfs_readdir(nfs_fd, &fh
+/*
+    read_more = nfs_readdir(nfs_fd, &fh
           , &cookie, &verifier
           , myCallBack
     );
-
+*/
+    for(;;) {
+        cookie3 old_cookie = cookie;
+        nfs_readdirplus(nfs_fd, &fh
+              , &cookie, &verifier
+              , myPlusCallBack
+        );
+        if (cookie == old_cookie)
+            break;
+    }
     mountd_umnt(mountd_fd, "/nfs/git");
 
 #if 0

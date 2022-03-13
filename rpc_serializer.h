@@ -1,7 +1,9 @@
 #include <stdint.h>
 #include <assert.h>
 #include "endian.h"
+#include "micronfs.h"
 
+typedef int SOCKET;
 #pragma pack(push, 1)
 typedef uint32_t u32;
 
@@ -38,6 +40,21 @@ typedef struct RPCSerializer
 
     uint8_t InlineStorage[512];
 } RPCSerializer;
+
+typedef struct RPCDeserializer
+{
+    uint32_t* ReadPtr;
+    uint8_t* BufferPtr;
+
+    /* amount of message unread */
+    SOCKET SockFd;
+    uint32_t Size;
+    uint32_t FragmentSize;
+    uint32_t MaxBuffer;
+
+    uint8_t InlineStorage[2048];
+} RPCDeserializer;
+
 
 static inline void ByteFlip_Array(u32* array, uint32_t length)
 {
@@ -133,3 +150,16 @@ static inline void RPCSerializer_PushU32(RPCSerializer* self, uint32_t value)
     self->WritePtr += 4;
     self->Size += 4;
 }
+
+void RPCDeserializer_Init(RPCDeserializer* self, SOCKET sock_fd);
+RPCHeader RPCDeserializer_RecvHeader(RPCDeserializer* self);
+int RPCDeserializer_ReadBool(RPCDeserializer *self);
+void RPCDeserializer_SkipAuth(RPCDeserializer *self);
+uint32_t RPCDeserializer_ReadU32(RPCDeserializer* self);
+const char* RPCDeserializer_ReadString(RPCDeserializer* self
+                                    , const char ** writePtr, uint32_t length);
+fhandle3 RPCDeserializer_ReadFileHandle(RPCDeserializer* self);
+fattr3 RPCDeserializer_ReadFileAttribs(RPCDeserializer* self);
+uint64_t RPCDeserializer_ReadU64(RPCDeserializer* self);
+
+#define ALIGN4(VAR) (((VAR) + 3) & ~3)

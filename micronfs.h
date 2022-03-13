@@ -1,5 +1,8 @@
 #include <stdint.h>
 
+#ifndef _MICRONFS_H_
+#define _MICRONFS_H_
+
 typedef enum nfsstat3 {
     NFS3ERR_OK          = 0,
     NFS3ERR_PERM        = 1,
@@ -138,4 +141,11 @@ typedef struct fattr3 {
     nfstime3   mtime;
     nfstime3   ctime;
 } fattr3;
+
+typedef struct fhandle3
+{
+    uint8_t fhandle3[64];
+} fhandle3;
 #pragma pack(pop)
+
+#endif
