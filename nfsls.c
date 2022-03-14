@@ -108,6 +108,9 @@ void PushUnixAuthN(RPCSerializer* self)
 #define MOUNT_EXPORT_PROCEDURE       5
 
 #define NFS_PROGRAM             100003
+#define NFS_READ_PROCEDURE           6
+#define NFS_WRITE_PROCEDURE          7
+#define NFS_CREATE_PROCEDURE         8
 #define NFS_READDIR_PROCEDURE       16
 #define NFS_READDIRPLUS_PROCEDURE   17
 #define MESSAGE_TYPE_CALL 0
@@ -409,11 +412,79 @@ static inline uint32_t fhandle3_length(const fhandle3* handle)
 
     return length;
 }
+int64_t nfs_read(SOCKET nfs_fd, const fhandle3* file
+               , void* data, uint32_t size
+               , uint64_t offset)
+{
+    RPCSerializer s = {0};
 
-int nfs_readdirplus(int nfs_fd, const fhandle3* dir
+    uint32_t read_xid = RPCSerializer_InitCall(&s,
+        PREP_RPC_CALL(NFS_PROGRAM, 3, NFS_READ_PROCEDURE));
+
+    PushUnixAuthN(&s);
+
+
+    int length = fhandle3_length(file);
+    RPCSerializer_PushString(&s, length, (const char*)file->fhandle3);
+    RPCSerializer_PushU64(&s, offset);
+    RPCSerializer_PushU32(&s, size);
+    RPCSerializer_Finalize(&s);
+    RPCSerializer_Send(&s, nfs_fd);
+    // ----------------------------------------------
+    RPCDeserializer d = {0};
+    RPCDeserializer_Init(&d, nfs_fd);
+
+    RPCHeader header = RPCDeserializer_RecvHeader(&d);
+
+    assert(header.xid == read_xid);
+
+    int accepted = RPCDeserializer_ReadBool(&d);
+    RPCDeserializer_SkipAuth(&d);
+    int accept_state = RPCDeserializer_ReadBool(&d);
+
+    nfsstat3 status = RPCDeserializer_ReadU32(&d);
+    printf("Status: %s\n", nfsstat3_toChars(status));
+    // -----------------------------------------------------
+
+    if (status)
+    {
+        fprintf(stderr, "Error [%s] while reading '%s'\n"
+             , nfsstat3_toChars(status)
+             , 0 /*LookupNameInCache(file)*/
+        );
+        return -1;
+    }
+
+    //TODO FIXME make sure size if less than rtMax form FSINFO Query!
+    if (RPCDeserializer_ReadU32(&d) != 0)
+    {
+        (void) RPCDeserializer_ReadFileAttribs(&d);
+    }
+    uint32_t result_count = RPCDeserializer_ReadU32(&d);
+    int eof = RPCDeserializer_ReadU32(&d) != 0;
+    uint32_t arraySize = RPCDeserializer_ReadU32(&d);
+    uint32_t bufferLeft = RPCDeserializer_BufferLeft(&d);
+
+    if (bufferLeft >= arraySize)
+    {
+        memcpy(data, d.ReadPtr, arraySize);
+    }
+    else
+    {
+        assert(0);
+        while (arraySize)
+        {
+         //   RPCDeserializer_EnsureSize(&d, )
+        }
+    }
+
+    return result_count;
+}
+int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
                , uint64_t *cookie, uint64_t *cookieverf
                , int (*fileIter)(const char* fName, uint64_t fileId,
-                                 const fhandle3* handle, const fattr3* attribs) )
+                                 const fhandle3* handle, const fattr3* attribs
+                               , void* userData), void* userData)
 {
     RPCSerializer s = {0};
 
@@ -473,13 +544,22 @@ int nfs_readdirplus(int nfs_fd, const fhandle3* dir
     cookie3 lastCookie;
     // ---------------------------------------------------------------------
     int hasNext = RPCDeserializer_ReadBool(&d);
+    int shouldContinueReading;
     while (hasNext)
     {
         char name_buffer[1024];
         char* namePtr = name_buffer;
         uint64_t fileid  = RPCDeserializer_ReadU64(&d);
         uint32_t name_length = RPCDeserializer_ReadU32(&d);
+
+        // the name might be longer than our buffer can hold
+        if ((RPCDeserializer_BufferLeft(&d) - 192) < (int32_t)name_length)
+        {
+            RPCDeserializer_EnsureSize(&d, ALIGN4(name_length + 124));
+        }
         const char* name  = RPCDeserializer_ReadString(&d, &namePtr, name_length);
+        uint32_t afterNameBufferLeft = RPCDeserializer_BufferLeft(&d);
+
         lastCookie = RPCDeserializer_ReadU64(&d);
         const fattr3* attribsPtr = 0;
         if (RPCDeserializer_ReadBool(&d))
@@ -494,16 +574,29 @@ int nfs_readdirplus(int nfs_fd, const fhandle3* dir
             handlePtr = &handle;
         }
 
-        if (!fileIter(name, fileid, handlePtr, attribsPtr))
+        if (!fileIter(name, fileid, handlePtr, attribsPtr, userData))
         {
             *cookie = lastCookie;
-            break;
+            shouldContinueReading = 0;
+            // Flush out recv queue;
+            while(((int)d.FragmentSizeLeft) > 0)
+            {
+                (*(int8_t**)&d.ReadPtr) += RPCDeserializer_BufferLeft(&d);
+                assert(RPCDeserializer_BufferLeft(&d) == 0);
+                int maxQuerySize = d.MaxBuffer;
+                if(d.FragmentSizeLeft < maxQuerySize)
+                    maxQuerySize = d.FragmentSizeLeft;
+                RPCDeserializer_EnsureSize(&d, maxQuerySize);
+            }
+            goto Lreturn;
         }
         hasNext = RPCDeserializer_ReadBool(&d);
     }
     // printf("Writing lastCookie into ptr");
     *cookie = lastCookie;
-    return RPCDeserializer_ReadBool(&d);
+    shouldContinueReading = RPCDeserializer_ReadBool(&d);
+Lreturn:
+    return shouldContinueReading;
 
 }
 
@@ -589,16 +682,41 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir
 #  define INVALID_SOCKET -1
 #endif
 
-int myPlusCallBack(const char* fName, uint64_t fileId,
-                   const fhandle3* handle, const fattr3* attribs)
+struct search_dir_t
 {
-    printf("name: %s, fileid %ull \n", fName, fileId);
+    const char* name;
+    fhandle3 result_handle;
+};
+
+int searchDir_cb(const char* fName, uint64_t fileId,
+                   const fhandle3* handle, const fattr3* attribs, void* userData)
+{
+    struct search_dir_t *search_req = (struct search_dir_t*) userData;
+    // printf("name: %s [%d] {%s}\n", fName, attribs->size, ftype3_toChars(attribs->type));
+    if (0 == strcmp(search_req->name, fName))
+    {
+        assert(handle);
+        search_req->result_handle = *handle;
+        return 0;
+    }
     return 1;
 }
 
 int myCallBack(const char* filename, uint64_t fileId)
 {
     return 1;
+}
+
+uint32_t handleSum(const fhandle3* handle)
+{
+    uint32_t sum = 0;
+
+    for(int i = 0; i < fhandle3_length(handle); i++)
+    {
+        sum += handle->fhandle3[i];
+    }
+
+    return sum;
 }
 
 int main(int argc, char* argv[])
@@ -675,15 +793,32 @@ int main(int argc, char* argv[])
           , myCallBack
     );
 */
+
+    struct search_dir_t searchResult = {"ll.txt"};
+
     for(;;) {
         cookie3 old_cookie = cookie;
+        int shouldContinueReading =
         nfs_readdirplus(nfs_fd, &fh
               , &cookie, &verifier
-              , myPlusCallBack
+              , searchDir_cb, &searchResult
         );
-        if (cookie == old_cookie)
+        if (!shouldContinueReading)
             break;
     }
+
+    if(handleSum(&searchResult.result_handle))
+    {
+       printFileHandle(&searchResult.result_handle);
+       char buf[512];
+       int size_read =
+            nfs_read(nfs_fd, &searchResult.result_handle, buf, sizeof(buf), 0);
+       buf[size_read] = '\0';
+
+       printf("data read: %s\n", buf);
+       // nfs_read(nfs_fs, &searchResult.handle
+    }
+
     mountd_umnt(mountd_fd, "/nfs/git");
 
 #if 0

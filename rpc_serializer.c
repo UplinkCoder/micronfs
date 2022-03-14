@@ -2,10 +2,10 @@
 #include <string.h>
 
 #ifdef _WIN32
-#include <winsock2.h>
+#  include <winsock2.h>
 #else
-#include <sys/socket.h>
-typedef int SOCKET;
+#  include <sys/socket.h>
+   typedef int SOCKET;
 #endif
 
 void RPCSerializer_Init(RPCSerializer* self, uint8_t* Buffer, uint32_t sz)
@@ -35,6 +35,16 @@ void RPCSerializer_PushNullAuth(RPCSerializer* self)
     *WritePtr++ = 0;
     self->Size += 4 * sizeof(u32);
     self->WritePtr = (uint8_t*) WritePtr;
+}
+
+void RPCSerializer_PushU64(RPCSerializer* self, uint64_t value)
+{
+    RPCSerializer_EnsureSize(self, 8);
+    (*(uint32_t*)self->WritePtr) = HTONL(value >> 32);
+    self->WritePtr += 4;
+    (*(uint32_t*)self->WritePtr) = HTONL(value & UINT32_MAX);
+    self->WritePtr += 4;
+    self->Size += 8;
 }
 
 void RPCSerializer_PushString(RPCSerializer* self,
@@ -121,18 +131,29 @@ RPCHeader RPCDeserializer_RecvHeader(RPCDeserializer* self)
     const uint32_t size_final = HTONL(*self->ReadPtr); self->ReadPtr++;
     const uint32_t xid = HTONL(*self->ReadPtr); self->ReadPtr++;
     const int reply = (*self->ReadPtr++) != 0;
-    self->FragmentSize = (size_final & ~(1 << 31));
+    self->FragmentSizeLeft = (size_final & ~(1 << 31));
+    self->FragmentSizeLeft -= self->Size;
     return (RPCHeader){size_final, xid, reply};
 }
 
 static inline void RPCDeserializer_RefillBuffer(RPCDeserializer* self)
 {
-
+    const int32_t oldSize = RPCDeserializer_BufferLeft(self);
+    assert(oldSize >= 0);
+    memmove(self->BufferPtr, self->ReadPtr, oldSize);
+    int RecivedBytes =
+        recv(self->SockFd, self->BufferPtr + oldSize, self->MaxBuffer - oldSize, 0);
+    self->FragmentSizeLeft -= RecivedBytes;
+    self->Size = oldSize + RecivedBytes;
+    self->ReadPtr = (const uint32_t*)self->BufferPtr;
 }
 
 void RPCDeserializer_EnsureSize(RPCDeserializer* self, uint32_t sz)
 {
-    return ;
+    if (RPCDeserializer_BufferLeft(self) < (int32_t)sz)
+    {
+        RPCDeserializer_RefillBuffer(self);
+    }
 }
 
 void RPCDeserializer_SkipAuth(RPCDeserializer *self)
@@ -145,8 +166,6 @@ void RPCDeserializer_SkipAuth(RPCDeserializer *self)
     // let's skip the auth whatever it is
     u32 skipU32s = (length >> 2) + !!(length & 3);
     self->ReadPtr += skipU32s;
-
-    RPCDeserializer_RefillBuffer(self);
 
     return ;
 }
@@ -188,13 +207,6 @@ fhandle3 RPCDeserializer_ReadFileHandle(RPCDeserializer* self)
 
     }
 
-    return result;
-}
-
-uint32_t RPCDeserializer_BufferLeft(RPCDeserializer* self)
-{
-    uint32_t result = self->Size -
-                      ((self->ReadPtr - (u32*)self->BufferPtr) * sizeof(u32));
     return result;
 }
 

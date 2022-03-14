@@ -49,7 +49,7 @@ typedef struct RPCDeserializer
     /* amount of message unread */
     SOCKET SockFd;
     uint32_t Size;
-    uint32_t FragmentSize;
+    int32_t FragmentSizeLeft;
     uint32_t MaxBuffer;
 
     uint8_t InlineStorage[1460];
@@ -76,6 +76,7 @@ void RPCSerializer_PushUnixAuth(RPCSerializer* self,
                                 uint32_t uid, uint32_t gid,
                                 const uint32_t n_aux_gids, const uint32_t aux_gids[]);
 
+void RPCSerializer_PushU64(RPCSerializer* self, uint64_t value);
 void RPCSerializer_PushString(RPCSerializer* self,
                               uint32_t length, const char* str);
 
@@ -163,6 +164,13 @@ static inline int RPCDeserializer_ReadBool(RPCDeserializer *self)
     return (*self->ReadPtr++ != 0);
 }
 
+static inline RPCDeserializer_BufferLeft(RPCDeserializer* self)
+{
+    int32_t result = self->Size -
+                      ((self->ReadPtr - (u32*)self->BufferPtr) * sizeof(u32));
+    return result;
+}
+
 void RPCDeserializer_Init(RPCDeserializer* self, SOCKET sock_fd);
 RPCHeader RPCDeserializer_RecvHeader(RPCDeserializer* self);
 void RPCDeserializer_SkipAuth(RPCDeserializer *self);
@@ -173,6 +181,6 @@ const char* RPCDeserializer_ReadString(RPCDeserializer* self
 fhandle3 RPCDeserializer_ReadFileHandle(RPCDeserializer* self);
 fattr3 RPCDeserializer_ReadFileAttribs(RPCDeserializer* self);
 uint64_t RPCDeserializer_ReadU64(RPCDeserializer* self);
-uint32_t RPCDeserializer_BufferLeft(RPCDeserializer* self);
+int32_t RPCDeserializer_BufferLeft(RPCDeserializer* self);
 
 #define ALIGN4(VAR) (((VAR) + 3) & ~3)

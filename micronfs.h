@@ -110,6 +110,7 @@ const char* nlm4_stats_toChars(nlm4_stats self);
 typedef uint32_t uid3;
 typedef uint32_t gid3;
 typedef uint64_t size3;
+typedef uint32_t count3;
 typedef uint64_t offset3;
 typedef uint32_t mode3;
 typedef uint64_t fileid3;
