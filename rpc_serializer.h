@@ -164,7 +164,7 @@ static inline int RPCDeserializer_ReadBool(RPCDeserializer *self)
     return (*self->ReadPtr++ != 0);
 }
 
-static inline RPCDeserializer_BufferLeft(RPCDeserializer* self)
+static inline int32_t RPCDeserializer_BufferLeft(RPCDeserializer* self)
 {
     int32_t result = self->Size -
                       ((self->ReadPtr - (u32*)self->BufferPtr) * sizeof(u32));
@@ -182,5 +182,6 @@ fhandle3 RPCDeserializer_ReadFileHandle(RPCDeserializer* self);
 fattr3 RPCDeserializer_ReadFileAttribs(RPCDeserializer* self);
 uint64_t RPCDeserializer_ReadU64(RPCDeserializer* self);
 int32_t RPCDeserializer_BufferLeft(RPCDeserializer* self);
+void RPCDeserializer_EnsureSize(RPCDeserializer* self, uint32_t sz);
 
 #define ALIGN4(VAR) (((VAR) + 3) & ~3)
