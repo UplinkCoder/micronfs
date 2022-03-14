@@ -380,25 +380,6 @@ mountlist_t* mountd_dump(int mountd_fd)
     return result;
 }
 
-static inline uint64_t ReadU64(const uint32_t ** readPtrP)
-{
-    const uint32_t * readPtr = *readPtrP;
-
-    const uint32_t rd_hi = *readPtr++;
-    const uint32_t hi = htonl(rd_hi);
-    const uint32_t rd_lw = *readPtr++;
-    const uint32_t lw = htonl(rd_lw);
-
-
-    uint64_t result = hi;
-    result <<= 32;
-    result |= lw;
-
-    // printf("hi: %x, lw: %x, res: %llx\n", hi, lw, result);
-
-    *readPtrP = readPtr;
-}
-
 static inline uint32_t fhandle3_length(const fhandle3* handle)
 {
     uint32_t length = 0;
@@ -480,11 +461,13 @@ int64_t nfs_read(SOCKET nfs_fd, const fhandle3* file
 
     return result_count;
 }
+
 int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
                , uint64_t *cookie, uint64_t *cookieverf
                , int (*fileIter)(const char* fName, uint64_t fileId,
                                  const fhandle3* handle, const fattr3* attribs
-                               , void* userData), void* userData)
+                               , void* userData)
+               , void* userData)
 {
     RPCSerializer s = {0};
 
