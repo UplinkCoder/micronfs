@@ -24,6 +24,7 @@
 #ifndef _cplusplus
 #  include <stdbool.h>
 #endif
+#define _GNU_SOURCE
 
 #include <fuse.h>
 #include <stdio.h>
@@ -86,14 +87,15 @@ static void *cnfs_init(struct fuse_conn_info *conn)
 }
 
 static int logSize = 0;
-static char log_buffer[65536];
-
+char (*log_buffer)[65536] = 0;
+static struct stat logStat;
 static void AddLog_(const char* msg, int len)
 {
     len = (len ? len : strlen(msg));
-    memcpy(log_buffer + logSize, msg, len);
+    memcpy((*log_buffer) + logSize, msg, len);
     logSize +=  (len + 1);
-    log_buffer[logSize - 1] = '\n';
+    logStat.st_size = logSize;
+    (*log_buffer)[logSize - 1] = '\n';
 }
 #define AddLog(STR, ...) \
     { \
@@ -108,8 +110,8 @@ static fileList_t* rootDir = 0;
 static fileList_t* nextFree = 0;
 static uint32_t freeListNodes = 0;
 
-fileList_t* TraverseDownTo(fileList_t* dir, const char** mPathP);
-fileList_t* TraverseDownToDir(fileList_t* dir, const char** mPathP);
+fileList_t* TraverseDownTo(const char** mPathP);
+fileList_t* TraverseDownToDir(const char** mPathP);
 
 fileList_t* LookupName(fileList_t* parent, const char* name)
 {
@@ -152,21 +154,17 @@ static int cnfs_getattr(const char *path, struct stat *stbuf)
 		stbuf->st_nlink = 1;
 		stbuf->st_size = strlen(options.contents);
 	} else if (strcmp(path, "/log") == 0) {
-		stbuf->st_mode = S_IFREG | 0444;
-        stbuf->st_size = logSize;
-        stbuf->st_nlink = 1;
+        *stbuf = logStat;
     } else
     {
         fileList_t* entry = rootDir;
-        char* mPath = path++;
-        entry = TraverseDownTo(entry, &mPath);
+        char* mPath = path + 1;
+        entry = TraverseDownTo(&mPath);
 
         if (entry)
         {
-            printf("Got entry\n");
-            if (*mPath)
-                entry = LookupName(entry, mPath);
             int isDir = entry->bitarray_entires & (1 << 31);
+            printf("Got entry\n");
             if (isDir)
             {
         		stbuf->st_mode = S_IFDIR | 0755;
@@ -202,7 +200,7 @@ static int cnfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	if (strcmp(path, "/") != 0)
     {
         const char* mPath = path + 1;
-		currentDir = TraverseDownTo(rootDir, &mPath);
+		currentDir = TraverseDownTo(&mPath);
     }
 
 	filler(buf, ".", NULL,  0);
@@ -217,9 +215,14 @@ static int cnfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
         }
         filler(buf, entry->name, &s, 0);
     }
-	//filler(buf, options.filename, NULL,  0);
-    if (!path || path[0] == '/' && path[1] == '\0')
-        filler(buf, "log", NULL, 0);
+    if (currentDir == rootDir
+        || !path
+        || path[0] == '/' && path[1] == '\0')
+    {
+        filler(buf, "log", &logStat, 0);
+        filler(buf, options.filename, NULL,  0);
+    }
+    
 
 	return 0;
 }
@@ -266,10 +269,13 @@ int AddDir(fileList_t* parent, const char* newDirName)
 
     assert(parent->bitarray_entires != 0);
     assert(freeListNodes);
+    fileList_t* lookupResult = 0;
 
-    if (LookupName(parent, newDirName) != 0)
+    if ((lookupResult = LookupName(rootDir, newDirName)) != 0)
+    {
+        int k = 12;
         return -EEXIST;
-
+    }
     fileList_t newNode;
 
     newNode.bitarray_entires = (1 << 31);
@@ -305,26 +311,47 @@ int AddDir(fileList_t* parent, const char* newDirName)
     return 0;
 }
 
-fileList_t* TraverseDownTo_(fileList_t* dir, const char** mPathP,
-                           bool stopAtDir)
+fileList_t* TraverseDownTo_(const char** mPathP, bool stopAtDir)
 {
+    fprintf(stderr, "called TraverseDownTo with: {\"%s\", %d}\n",
+        *mPathP, stopAtDir
+    );
+    fileList_t* parent = rootDir;
+    fileList_t* result = rootDir;
+    
     const char *resultPath =  *mPathP;
     const char *mPath = resultPath;
     char c = *mPath;
-    const uint32_t bitfield = dir ? dir->bitarray_entires : 0;
+    const uint32_t bitfield = rootDir->bitarray_entires;
     int idx = (c & ~32) - 'A';
     fileList_t *canidate = 0;
     fileList_t *pastLastEntry;
     char component_storage[256];
     int len = 0;
 
+    const char* mPathEnd = (const char*)rawmemchr(mPath, '\0');
+    if (stopAtDir)
+    {
+        char c;
+        for(const char* newPathEnd = mPathEnd;
+            newPathEnd > mPath; --newPathEnd)
+            {
+                if ((c = *newPathEnd) == '/')
+                {
+                    mPathEnd = newPathEnd;
+                    break;
+                }
+            }
+    }
+    
+
     if ((bitfield & (1 << 31)) == 0)
         return 0;
 
-    if ((idx <= 26 && (dir->bitarray_entires & (1 << idx)))
-        || dir->bitarray_entires & (1 << 27))
+    if ((idx <= 26 && (bitfield & (1 << idx)))
+        || bitfield & (1 << 27))
     {
-        while(mPath && *mPath != '\0')
+        while(mPath < mPathEnd)
         {
             len = 0;
             resultPath = mPath;
@@ -352,20 +379,24 @@ fileList_t* TraverseDownTo_(fileList_t* dir, const char** mPathP,
             }
             component_storage[len] = '\0';
             printf ("found componenet: '%s'\n", component_storage);
+            int lastComponent = (strlen(mPath) == len); 
             {
-                pastLastEntry = dir->entries + dir->n_entires;
-                for(canidate = dir->entries;
+                pastLastEntry = parent->entries + parent->n_entires;
+                for(canidate = result->entries;
                     canidate < pastLastEntry;
                     canidate++)
                 {
-                    if (strcmp(canidate->name, component_storage))
+                    if (0 == strcmp(canidate->name, component_storage))
                     {
-                        dir = canidate;
+                        parent = canidate;
+                        if (lastComponent)
+                            result = canidate;
                         goto Lfound;
                     }
                 }
                 // if we reach here it means we couldn't find the path
                 fprintf(stderr, "path [%s] not could be resolved\n\tfailing fragment:%s\n", *mPathP, mPath);
+                result = 0;
                 goto Lend;
             }
 Lfound:
@@ -375,29 +406,27 @@ Lfound:
             resultPath = mPath;
         }
     }
-    else
-    {
-        dir = 0;
-    }
+    
 Lend:
+    if (result) printf("entry: %s\n", result->name);
     *mPathP = resultPath;
-    return dir;
+    return result;
 }
 
-fileList_t* TraverseDownTo(fileList_t* dir, const char** mPathP)
+fileList_t* TraverseDownTo(const char** mPathP)
 {
-    return TraverseDownTo_(dir, mPathP, false);
+    return TraverseDownTo_(mPathP, false);
 }
 
-fileList_t* TraverseDownToDir(fileList_t* dir, const char** mPathP)
+fileList_t* TraverseDownToDir(const char** mPathP)
 {
-    return TraverseDownTo_(dir, mPathP, true);
+    return TraverseDownTo_(mPathP, true);
 }
 static int cnfs_mkdir (const char *path, mode_t mode)
 {
     AddLog("mkdir: '%s'", path);
     const char* mPath = path + 1;
-    fileList_t* parent = TraverseDownToDir(rootDir, &mPath);
+    fileList_t* parent = TraverseDownToDir(&mPath);
     AddDir(parent, mPath);
 }
 
@@ -412,8 +441,8 @@ static int cnfs_open(const char *path, struct fuse_file_info *fi)
     {
         return 0;
     }
-
-    fileList_t* entry = TraverseDownTo(rootDir, path);
+    char* mPath = path + 1;
+    fileList_t* entry = TraverseDownTo(&mPath);
     if (entry)
     {
         return CheckAccess(entry, (fi->flags & O_ACCMODE));
@@ -504,9 +533,13 @@ int main(int argc, char *argv[])
 	int ret;
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 
+    logStat.st_mode = S_IFREG | 0444;
+    logStat.st_nlink = 1;
+    logStat.st_size = 0;
+
     freeListNodes = 4096;
     nextFree = (fileList_t*)malloc(sizeof(fileList_t) * freeListNodes);
-
+    log_buffer = malloc(sizeof(char[65536]));
     //setup the root entry
     rootDir = nextFree++;
     rootDir->bitarray_entires |= (1 << 31);
