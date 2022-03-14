@@ -237,8 +237,6 @@ typedef struct mountlist_t {
 } mountlist_t;
 
 
-
-
 void printFileHandle(const fhandle3* handle)
 {
     const uint32_t* ptr = (const uint32_t*)
@@ -393,6 +391,8 @@ static inline uint32_t fhandle3_length(const fhandle3* handle)
 
     return length;
 }
+
+
 int64_t nfs_read(SOCKET nfs_fd, const fhandle3* file
                , void* data, uint32_t size
                , uint64_t offset)
