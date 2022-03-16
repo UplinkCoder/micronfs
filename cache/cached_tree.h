@@ -43,8 +43,8 @@ typedef struct cached_file_t
 {
     uint32_t crc32; /// crc32_hash of the cached file
     uint32_t mtime; /// remote mtime at point of caching
-    uint32_t last_checked_time; /// when has the last sync with remote happend
     uint32_t size; /// size of the cached data
+    uint32_t padding; ///currently meaningless for files
 
     void* data;
 } cached_file_t;
@@ -54,10 +54,10 @@ typedef struct cached_dir_t
 {
     uint32_t crc32; /// mixed_file_hashes of all the content
     uint32_t mtime; /// remote mtime at point of caching
-    uint32_t last_checked_time; /// when has the last sync with remote happend
-    uint32_t n_entires; /// how many entires the directory has
+    uint32_t entries_size; /// how many entires the directory has
+    uint32_t entries_capacity; /// how many entries are allocated in the entries array
 
-    meta_data_entry_t* entires;
+    meta_data_entry_t* entries;
 } cached_dir_t;
 
 typedef enum entry_type_t {
@@ -108,8 +108,17 @@ typedef struct cache_t
     uint32_t dir_entries_capacity;
 } cache_t;
 
+meta_data_entry_t* LookupInDirectory(cache_t* cache, cached_dir_t* lookupDir,
+                                     const char* name, size_t name_length);
+
+meta_data_entry_t* LookupInDirectoryByKey(cache_t* cache, cached_dir_t* lookupDir,
+                                          const char* name, uint32_t entry_key);
+
+cached_dir_t* GetOrCreateSubdirectory(cache_t* cache, cached_dir_t* parentDir,
+                                      const char* directory_name, size_t name_length);
+
 meta_data_entry_t* LookupPath(cache_t* cache, const char* full_path,
-                              uint16_t path_length);
+                              size_t path_length);
 
 name_cache_ptr_t GetOrAddName(cache_t* cache, const char* name);
 
@@ -117,7 +126,7 @@ name_cache_ptr_t GetOrAddNameLength(cache_t* cache, const char* name,
                                     size_t length);
 
 meta_data_entry_t* CreateEntry(cache_t* cache, const char* full_path,
-                               uint16_t path_length);
+                               size_t path_length);
 
 void ResetCache(cache_t* cache);
 
@@ -125,3 +134,7 @@ void ResetCache(cache_t* cache);
 /// Adds or updates a file
 meta_data_entry_t* AddFile(cache_t* cache, const char* full_path,
                             const void* content, uint32_t content_size);
+
+#ifndef ALIGN4
+#  define ALIGN4(VAR) (((VAR) + 3) & ~3)
+#endif
