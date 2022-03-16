@@ -637,7 +637,7 @@ int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
     }
     // printf("Writing lastCookie into ptr");
     *cookie = lastCookie;
-    shouldContinueReading = RPCDeserializer_ReadBool(&d);
+    shouldContinueReading = !RPCDeserializer_ReadBool(&d);
 Lreturn:
     return shouldContinueReading;
 
