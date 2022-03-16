@@ -121,7 +121,7 @@ static inline uint32_t singletable_crc32c(uint32_t crc, const uint8_t *buf, uint
     return crc;
 }
 
-#endif
+#endif // NO_CRC32C_TABLE
 
 #ifdef ARM_NEON_CRC32C
 /*
@@ -208,7 +208,7 @@ EXTERN_C uint32_t crc32c(uint32_t crc, const void* s, const uint32_t len_p)
 }
 
 #define CRC32C_S(STRING) \
-    (crc32c(~(uint32_t)0, STRING, sizeof(STRING) - 1) ^ ~(uint32_t)0)
+    (crc32c(~(uint32_t)0, STRING, sizeof(STRING) - 1))
 
 #ifdef TEST_MAIN
 #include <assert.h>
