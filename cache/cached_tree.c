@@ -233,16 +233,26 @@ Lret:
     return result;
 }
 
+cached_dir_t* GetOrCreateSubdirectory(cache_t* cache, cached_dir_t* parentDir,
+                                      const char* directory_name, size_t name_length)
+{
+    const uint32_t key = EntryKey(directory_name, name_length);
+    return GetOrCreateSubdirectoryByKey(cache, parentDir, directory_name, key);
+}
+
+
 meta_data_entry_t* CreateEntry(cache_t* cache, const char* full_path,
                                size_t path_length)
 {
     meta_data_entry_t* result = 0;
     assert(full_path[0] == '/');
     assert(full_path[path_length - 1] != '/');
+    if (path_length < 2)
+        return cache->root;
+
     // make sure we dont have an empty last part
 
     uint32_t full_path_key = EntryKey(full_path, path_length);
-
 
     if (LookupPathByKey(cache, full_path, full_path_key))
     {
@@ -267,8 +277,7 @@ meta_data_entry_t* CreateEntry(cache_t* cache, const char* full_path,
         path_remaining -= (segment_length + 1);
     }
 
-    uint32_t entry_key = (path_remaining << 16)
-                       | (crc32c(~0, begin_segment, path_remaining) & 0xFFFF);
+    uint32_t entry_key = EntryKey(begin_segment, path_remaining);
 
     result = LookupInDirectoryByKey(cache, currentDir, begin_segment, entry_key);
     if (result)
@@ -406,6 +415,7 @@ int main(int argc, char** argv)
 
     cache.root->cached_dir = dirs_mem++;
 
+    ResetCache(&cache);
     CreateEntry(&cache, "/Hello/World", strlen("/Hello/World"));
 
     name_cache_ptr_t w = GetOrAddName(&cache, "William");

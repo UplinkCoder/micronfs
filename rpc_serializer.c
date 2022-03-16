@@ -8,6 +8,10 @@
    typedef int SOCKET;
 #endif
 
+#ifndef _cplusplus
+#  include <stdbool.h>
+#endif
+
 void RPCSerializer_Init(RPCSerializer* self, uint8_t* Buffer, uint32_t sz)
 {
     self->BufferPtr = Buffer ? Buffer : self->InlineStorage;
@@ -20,7 +24,7 @@ void RPCSerializer_Init(RPCSerializer* self, uint8_t* Buffer, uint32_t sz)
 void RPCSerializer_Finalize(RPCSerializer* self)
 {
     RPCHeader* header = (RPCHeader*)self->BufferPtr;
-    _Bool last_package = 1;
+    bool last_package = 1;
     header->size_final = HTONL(self->Size | (last_package << 31));
 }
 

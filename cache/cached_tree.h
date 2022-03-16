@@ -117,6 +117,9 @@ meta_data_entry_t* LookupInDirectoryByKey(cache_t* cache, cached_dir_t* lookupDi
 cached_dir_t* GetOrCreateSubdirectory(cache_t* cache, cached_dir_t* parentDir,
                                       const char* directory_name, size_t name_length);
 
+cached_dir_t* GetOrCreateSubdirectoryByKey(cache_t* cache, cached_dir_t* parentDir,
+                                           const char* directory_name, uint32_t entryKey);
+
 meta_data_entry_t* LookupPath(cache_t* cache, const char* full_path,
                               size_t path_length);
 
