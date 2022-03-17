@@ -1,5 +1,5 @@
 #include <stdint.h>
-
+#include "../micronfs.h"
 struct cached_file_t;
 struct cached_dir_t;
 
@@ -7,6 +7,11 @@ typedef struct name_cache_ptr_t
 {
     uint32_t v;
 } name_cache_ptr_t;
+
+typedef struct filehandle_ptr_t
+{
+    uint32_t v;
+} filehandle_ptr_t;
 
 typedef struct name_cache_node_t
 {
@@ -36,6 +41,7 @@ typedef struct meta_data_entry_t
         struct cached_file_t* cached_file;
         struct cached_dir_t* cached_dir;
     };
+    filehandle_ptr_t handle;
 } meta_data_entry_t;
 
 /// contains cached data which is likely to change
@@ -93,9 +99,9 @@ typedef struct cache_t
     uint32_t metadata_size;
     uint32_t metadata_capacity;
 
-    char* name_cache;
-    uint32_t name_cache_size;
-    uint32_t name_cache_capacity;
+    char* name_stringtable;
+    uint32_t name_stringtable_size;
+    uint32_t name_stringtable_capacity;
 
     /// the root has the virtual value of 7fff
     /// which means whenever we get hash is to 7fff we store it here
@@ -106,6 +112,12 @@ typedef struct cache_t
     cached_dir_t* dir_entries;
     uint32_t dir_entries_size;
     uint32_t dir_entries_capacity;
+
+    uint32_t* limbs;
+    uint32_t limbs_size;
+    uint32_t limbs_capacity;
+
+    fhandle3 rootHandle;
 } cache_t;
 
 meta_data_entry_t* LookupInDirectory(cache_t* cache, cached_dir_t* lookupDir,
@@ -114,11 +126,11 @@ meta_data_entry_t* LookupInDirectory(cache_t* cache, cached_dir_t* lookupDir,
 meta_data_entry_t* LookupInDirectoryByKey(cache_t* cache, cached_dir_t* lookupDir,
                                           const char* name, uint32_t entry_key);
 
-cached_dir_t* GetOrCreateSubdirectory(cache_t* cache, cached_dir_t* parentDir,
-                                      const char* directory_name, size_t name_length);
+meta_data_entry_t* GetOrCreateSubdirectory(cache_t* cache, cached_dir_t* parentDir,
+                                           const char* directory_name, size_t name_length);
 
-cached_dir_t* GetOrCreateSubdirectoryByKey(cache_t* cache, cached_dir_t* parentDir,
-                                           const char* directory_name, uint32_t entryKey);
+meta_data_entry_t* GetOrCreateSubdirectoryByKey(cache_t* cache, cached_dir_t* parentDir,
+                                                const char* directory_name, uint32_t entryKey);
 
 meta_data_entry_t* LookupPath(cache_t* cache, const char* full_path,
                               size_t path_length);

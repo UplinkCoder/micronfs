@@ -24,7 +24,7 @@ meta_data_entry_t* LookupPathByKey(cache_t* cache, const char* full_path,
         {
             const char* entry_path =
                 (toc_entry->relative_name_pointer.v - 4)
-                + cache->name_cache;
+                + cache->name_stringtable;
             if (!memcmp(entry_path, full_path, path_length))
             {
                 result = toc_entry->entry;
@@ -32,6 +32,94 @@ meta_data_entry_t* LookupPathByKey(cache_t* cache, const char* full_path,
             }
         }
     }
+
+    return result;
+}
+
+static inline uint32_t fhandle3_length(const fhandle3* handle)
+{
+    uint32_t length = 0;
+
+    for(int i = 0; i < 8;i++)
+    {
+        if (((uint32_t*)handle->fhandle3)[i] == 0)
+            break;
+        length += 4;
+    }
+
+    return length;
+}
+
+fhandle3 ptrToHandle(cache_t* cache, filehandle_ptr_t fh_ptr)
+{
+    fhandle3 result = {{0}};
+
+    const uint32_t ptr = fh_ptr.v & ((1 << 27) - 1);
+    const uint32_t compressed_bit = (fh_ptr.v >> 31);
+    const uint32_t ptr_length = ((fh_ptr.v >> 27) & 15);
+    if (fh_ptr.v == 0)
+    {
+        result = cache->rootHandle;
+    }
+    int start_copy_limbs   = 0;
+    int limbs_to_be_copied = ptr_length;
+
+    if (compressed_bit & 1)
+    {
+        (*((uint32_t*)(result.fhandle3) + 0)) = 0x1000001;
+        (*((uint32_t*)(result.fhandle3) + 1)) = (*((uint32_t*)(cache->rootHandle.fhandle3 + 4)));
+        (*((uint32_t*)(result.fhandle3) + 2)) = (*((uint32_t*)(cache->rootHandle.fhandle3 + 8)));
+        start_copy_limbs = 3;
+    }
+
+    uint32_t* limb_start = cache->limbs + ptr + start_copy_limbs;
+
+    uint32_t* one_past_last = cache->limbs + ptr + limbs_to_be_copied;
+    for(uint32_t* limb = limb_start;
+        limb < one_past_last;
+        limb++)
+    {
+        *(((uint32_t*)result.fhandle3) + start_copy_limbs++) = *limb;
+    }
+
+    return result;
+}
+
+filehandle_ptr_t handleToPtr(cache_t* cache, const fhandle3* handle)
+{
+    filehandle_ptr_t result = {0};
+
+    const uint32_t* handle_limbs = (uint32_t*)(handle->fhandle3);
+
+    uint32_t handle_length = (fhandle3_length(handle) >> 2);
+    assert(handle_length < 16);
+
+
+    if (handle_limbs[0] == 0x1000001)
+    {
+        if (handle_limbs[1] == ((uint32_t*)(cache->rootHandle.fhandle3))[1]
+         && handle_limbs[2] == ((uint32_t*)(cache->rootHandle.fhandle3))[2])
+         {
+             result.v |= (1 << 31);
+             handle_length -= 3;
+             handle_limbs += 3;
+         }
+    }
+    result.v |= (handle_length << 27);
+
+    assert(cache->limbs_capacity > (cache->limbs_size + handle_length));
+    result.v |= cache->limbs_size;
+
+    uint32_t* one_past_last =
+        cache->limbs + cache->limbs_size + handle_length;
+
+    for(uint32_t* dst_limb = cache->limbs + cache->limbs_size;
+        dst_limb < one_past_last; dst_limb++)
+    {
+        *dst_limb = *handle_limbs++;
+    }
+
+    cache->limbs_size += handle_length;
 
     return result;
 }
@@ -59,7 +147,7 @@ name_cache_ptr_t GetOrAddNameByKey(cache_t* cache, const char* name,
         if (!cmp_result)
         {
             const char* cached_name = (currentBranch->name_ptr.v - 4)
-                                    + cache->name_cache;
+                                    + cache->name_stringtable;
             if ((cmp_result = memcmp(name, cached_name, length)) == 0)
             {
                 return currentBranch->name_ptr;
@@ -92,16 +180,16 @@ name_cache_ptr_t GetOrAddNameByKey(cache_t* cache, const char* name,
                     currentBranch->right = nextBranch - currentBranch;
                 }
 
-                assert(cache->name_cache_size
-                       < cache->name_cache_capacity);
+                assert(cache->name_stringtable_size
+                       < cache->name_stringtable_capacity);
                 char* cached_name =
-                    cache->name_cache_size + cache->name_cache;
+                    cache->name_stringtable_size + cache->name_stringtable;
                 memcpy(cached_name, name, length);
                 *(cached_name + length) = '\0';
 
 
-                name_cache_ptr_t name_ptr = { cache->name_cache_size + 4 };
-                cache->name_cache_size += ALIGN4(length + 1);
+                name_cache_ptr_t name_ptr = { cache->name_stringtable_size + 4 };
+                cache->name_stringtable_size += ALIGN4(length + 1);
 
                 *nextBranch =
                     (name_cache_node_t){entry_key, 0, 0, name_ptr};
@@ -136,7 +224,7 @@ void ResetCache(cache_t* cache)
     cache->name_cache_root->entry_key = 0x7fff;
     cache->name_cache_root->left = 0;
     cache->name_cache_root->right = 0;
-    cache->name_cache_size = 0;
+    cache->name_stringtable_size = 0;
     cache->name_cache_node_size = 1;
 }
 
@@ -157,7 +245,7 @@ meta_data_entry_t* LookupInDirectoryByKey(cache_t* cache, cached_dir_t* lookupDi
         if (entry_key == entry->entry_key)
         {
             const char* entry_name =
-                cache->name_cache + (entry->name.v - 4);
+                cache->name_stringtable + (entry->name.v - 4);
             if (!memcmp(name, entry_name, name_length))
             {
                 result = entry;
@@ -190,10 +278,10 @@ meta_data_entry_t* LookupInDirectory(cache_t* cache, cached_dir_t* lookupDir,
     return LookupInDirectoryByKey(cache, lookupDir, name, entry_key);
 }
 
-cached_dir_t* GetOrCreateSubdirectoryByKey(cache_t* cache, cached_dir_t* parentDir,
-                                      const char* directory_name, uint32_t entry_key)
+meta_data_entry_t* GetOrCreateSubdirectoryByKey(cache_t* cache, cached_dir_t* parentDir,
+                                                const char* directory_name, uint32_t entry_key)
 {
-    cached_dir_t* result = 0;
+    meta_data_entry_t* result = 0;
 
     meta_data_entry_t* lookupResult =
         LookupInDirectoryByKey(cache, parentDir, directory_name, entry_key);
@@ -201,7 +289,7 @@ cached_dir_t* GetOrCreateSubdirectoryByKey(cache_t* cache, cached_dir_t* parentD
     if (lookupResult)
     {
         if (lookupResult->type == ENTRY_TYPE_DIRECTORY)
-            result = lookupResult->cached_dir;
+            result = lookupResult;
         else
             err = -EEXIST;
         goto Lret;
@@ -217,24 +305,22 @@ cached_dir_t* GetOrCreateSubdirectoryByKey(cache_t* cache, cached_dir_t* parentD
         parentDir->entries_capacity = 64;
     }
 
-    assert(cache->dir_entries_capacity > cache->dir_entries_size);
-    result = cache->dir_entries + cache->dir_entries_size++;
-
     assert(parentDir->entries_size < parentDir->entries_capacity);
-    meta_data_entry_t* subdir =
-        parentDir->entries + parentDir->entries_size++;
+    result = parentDir->entries + parentDir->entries_size++;
 
-    subdir->entry_key = entry_key;
-    subdir->name = GetOrAddNameByKey(cache, directory_name, entry_key);
+    assert(cache->dir_entries_capacity > cache->dir_entries_size);
+    result->cached_dir = cache->dir_entries + cache->dir_entries_size++;
 
-    subdir->type = ENTRY_TYPE_DIRECTORY;
-    subdir->cached_dir = result;
+    result->entry_key = entry_key;
+    result->name = GetOrAddNameByKey(cache, directory_name, entry_key);
+
+    result->type = ENTRY_TYPE_DIRECTORY;
 Lret:
     return result;
 }
 
-cached_dir_t* GetOrCreateSubdirectory(cache_t* cache, cached_dir_t* parentDir,
-                                      const char* directory_name, size_t name_length)
+meta_data_entry_t* GetOrCreateSubdirectory(cache_t* cache, cached_dir_t* parentDir,
+                                           const char* directory_name, size_t name_length)
 {
     const uint32_t key = EntryKey(directory_name, name_length);
     return GetOrCreateSubdirectoryByKey(cache, parentDir, directory_name, key);
@@ -272,7 +358,7 @@ meta_data_entry_t* CreateEntry(cache_t* cache, const char* full_path,
 
         size_t segment_length = end_segment - begin_segment;
         uint32_t segment_key = EntryKey(begin_segment, segment_length);
-        currentDir = GetOrCreateSubdirectoryByKey(cache, currentDir, begin_segment, segment_key);
+        currentDir = GetOrCreateSubdirectoryByKey(cache, currentDir, begin_segment, segment_key)->cached_dir;
         begin_segment += segment_length + 1;
         path_remaining -= (segment_length + 1);
     }
@@ -354,10 +440,10 @@ meta_data_entry_t* AddFile(cache_t* cache, const char* full_path,
 #include <stdlib.h>
 void PrintNameCache(cache_t* cache)
 {
-    char const * one_past_last = cache->name_cache
-                               + cache->name_cache_size;
+    char const * one_past_last = cache->name_stringtable
+                               + cache->name_stringtable_size;
     int i = 0;
-    for(const char* str = cache->name_cache;
+    for(const char* str = cache->name_stringtable;
         str < one_past_last;
         str += (ALIGN4(strlen(str) + 1)))
     {
@@ -401,9 +487,9 @@ int main(int argc, char** argv)
         .metadata_size = 1,
         .metadata_capacity = initial_metadata_nodes,
 
-        .name_cache  = (char*)(cache_memory + sizeof(cache_t)),
-        .name_cache_size = 0,
-        .name_cache_capacity = initial_name_storage_capacity,
+        .name_stringtable  = (char*)(cache_memory + sizeof(cache_t)),
+        .name_stringtable_size = 0,
+        .name_stringtable_capacity = initial_name_storage_capacity,
 
         .name_cache_root = tree_mem,
         .name_cache_node_size = 1,

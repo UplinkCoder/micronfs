@@ -37,21 +37,8 @@ struct sockaddr_in s_client;
 #include "micronfs.h"
 #include "rpc_serializer.h"
 
-#define HTON_RPC(RPC_STRUCT) \
-    ByteFlip_Array((u32*)&(RPC_STRUCT), sizeof((RPC_STRUCT)) / sizeof(u32));
-
-typedef struct RPCService {
-    uint32_t programm_id;
-    uint32_t version_;
-    uint32_t network_id_length;
-    char* network_id_ptr;
-} RPCService;
-
-typedef const uint32_t ** readPtrP_t;
-
-
 #ifndef MAP_UNINITIALIZED
-#define MAP_UNINITIALIZED 0
+#  define MAP_UNINITIALIZED 0
 #endif
 #define MAX_BUFFER_SIZE 4096
 
@@ -83,15 +70,6 @@ int connect_name(const char* hostname, const char* port)
 
     return sfd;
 }
-
-
-typedef struct portmap_dump_res {
-    u32 program;
-    u32 version_;
-    u32 port;
-    u32 proto;
-    struct portmap_dump_res* next;
-} portmap_dump_res;
 
 
 void PushUnixAuthN(RPCSerializer* self)
@@ -129,6 +107,7 @@ void InitCache(cache_t* cache)
     uint32_t initial_metadata_nodes = 512;
     uint32_t initial_dir_nodes = 256;
     uint32_t initial_toc_capacity = 256;
+    uint32_t initial_limb_capacity = 512;
 
     uint8_t* cache_memory = (uint8_t*) malloc(
         sizeof(cache_t) + initial_name_storage_capacity
@@ -148,6 +127,9 @@ void InitCache(cache_t* cache)
     cached_dir_t* dirs_mem = (cached_dir_t*)calloc(
         initial_dir_nodes, sizeof(cached_dir_t));
 
+    uint32_t* limbs_mem = (uint32_t*) calloc(
+        initial_limb_capacity , sizeof(uint32_t));
+
     *cache = (cache_t) {
         .toc_entries = toc_mem,
         .root = meta_mem++,
@@ -158,9 +140,9 @@ void InitCache(cache_t* cache)
         .metadata_size = 1,
         .metadata_capacity = initial_metadata_nodes,
 
-        .name_cache  = (char*)(cache_memory + sizeof(cache_t)),
-        .name_cache_size = 0,
-        .name_cache_capacity = initial_name_storage_capacity,
+        .name_stringtable  = (char*)(cache_memory + sizeof(cache_t)),
+        .name_stringtable_size = 0,
+        .name_stringtable_capacity = initial_name_storage_capacity,
 
         .name_cache_root = tree_mem,
         .name_cache_node_size = 1,
@@ -168,7 +150,11 @@ void InitCache(cache_t* cache)
 
         .dir_entries = dirs_mem,
         .dir_entries_size = 0,
-        .dir_entries_capacity = initial_dir_nodes
+        .dir_entries_capacity = initial_dir_nodes,
+
+        .limbs = limbs_mem,
+        .limbs_size = 0,
+        .limbs_capacity = initial_limb_capacity
     };
 
     cache->root->cached_dir = dirs_mem++;
@@ -222,70 +208,6 @@ uint16_t portmap_getport(int sock_fd,
     assert(port <= UINT16_MAX);
 
     return port;
-}
-
-portmap_dump_res* portmap_dump(int sock_fd)
-{
-    static portmap_dump_res pm_dump_storage[6];
-    portmap_dump_res* result =  (portmap_dump_res*)
-        pm_dump_storage;
-
-    RPCSerializer s = {0};
-
-    RPCSerializer_InitCall(&s,
-        PREP_RPC_CALL(PORTMAP_PROGRAM, 2, PORTMAP_DUMP_PROCEDURE));
-
-    RPCSerializer_PushNullAuth(&s);
-    RPCSerializer_Finalize(&s);
-    RPCSerializer_Send(&s, sock_fd);
-
-    RPCDeserializer d = {0};
-
-    RPCDeserializer_Init(&d, sock_fd);
-    RPCHeader header =
-        RPCDeserializer_RecvHeader(&d);
-
-
-    bool accepted = RPCDeserializer_ReadBool(&d);
-
-    RPCDeserializer_SkipAuth(&d);
-
-    nfsstat3 status = RPCDeserializer_ReadU32(&d);
-
-    printf("Status: %s\n", nfsstat3_toChars(status));
-    // now the actual params come ...
-
-    bool hasNext =  RPCDeserializer_ReadBool(&d);
-    bool hadPrev = 0;
-    portmap_dump_res* entry = result;
-    while(hasNext)
-    {
-        portmap_dump_res r = {
-            .program = RPCDeserializer_ReadU32(&d),
-            .version_ = RPCDeserializer_ReadU32(&d),
-            .port = RPCDeserializer_ReadU32(&d),
-            .proto = RPCDeserializer_ReadU32(&d)
-        };
-
-        // printf("read a record\n");
-        hasNext = RPCDeserializer_ReadBool(&d);
-        if (r.program == MOUNT_PROGRAM
-            && r.version_ == 3
-            && r.proto == 6)
-        {
-            if (hadPrev)
-            {
-                entry->next = entry + 1;
-                ++entry;
-            }
-            else
-                hadPrev = 1;
-
-            *entry = r;
-        }
-    }
-
-    return result;
 }
 
 typedef struct mountlist_t {
@@ -436,20 +358,6 @@ mountlist_t* mountd_dump(int mountd_fd)
     return result;
 }
 
-static inline uint32_t fhandle3_length(const fhandle3* handle)
-{
-    uint32_t length = 0;
-
-    for(int i = 0; i < 8;i++)
-    {
-        if (((uint32_t*)handle->fhandle3)[i] == 0)
-            break;
-        length += 4;
-    }
-
-    return length;
-}
-
 
 int64_t nfs_read(SOCKET nfs_fd, const fhandle3* file
                , void* data, uint32_t size
@@ -489,7 +397,7 @@ int64_t nfs_read(SOCKET nfs_fd, const fhandle3* file
     {
         fprintf(stderr, "Error [%s] while reading '%s'\n"
              , nfsstat3_toChars(status)
-             , 0 /*LookupNameInCache(file)*/
+             , "" /*LookupNameInCache(file)*/
         );
         return -1;
     }
@@ -522,9 +430,9 @@ int64_t nfs_read(SOCKET nfs_fd, const fhandle3* file
 
 int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
                , uint64_t *cookie, uint64_t *cookieverf
-               , int (*fileIter)(const char* fName, uint64_t fileId,
-                                 const fhandle3* handle, const fattr3* attribs
-                               , void* userData)
+               , int (*fileIter)(const char* fName, const fhandle3* handle,
+                                 const fattr3* attribs,
+                                 void* userData)
                , void* userData)
 {
     RPCSerializer s = {0};
@@ -615,7 +523,7 @@ int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
             handlePtr = &handle;
         }
 
-        if (!fileIter(name, fileid, handlePtr, attribsPtr, userData))
+        if (!fileIter(name, handlePtr, attribsPtr, userData))
         {
             *cookie = lastCookie;
             shouldContinueReading = 0;
@@ -729,8 +637,8 @@ struct search_dir_t
     fhandle3 result_handle;
 };
 
-int searchDir_cb(const char* fName, uint64_t fileId,
-                   const fhandle3* handle, const fattr3* attribs, void* userData)
+int searchDir_cb(const char* fName, const fhandle3* handle,
+                 const fattr3* attribs, void* userData)
 {
     struct search_dir_t *search_req = (struct search_dir_t*) userData;
     // printf("name: %s [%d] {%s}\n", fName, attribs->size, ftype3_toChars(attribs->type));
@@ -743,16 +651,29 @@ int searchDir_cb(const char* fName, uint64_t fileId,
     return 1;
 }
 
-int populateCache_cb(const char* fName, uint64_t fileId,
-                   const fhandle3* handle, const fattr3* attribs, void* userData)
+typedef struct populate_cache_cb_args_t
 {
-    cache_t* cache = (cache_t*)userData;
+    cache_t* cache;
+    meta_data_entry_t* parentDir;
+} populate_cache_cb_args_t;
+
+int populateCache_cb(const char* fName, const fhandle3* handle,
+                     const fattr3* attribs, void* userData)
+{
+    populate_cache_cb_args_t* args =
+        (populate_cache_cb_args_t*) userData;
+
+    cache_t* cache = args->cache;
+    meta_data_entry_t* parentDir = args->parentDir;
+
     const uint32_t len = strlen(fName);
+    meta_data_entry_t* entry = 0;
+
     if (attribs)
     {
         if (attribs->type == NF3DIR)
         {
-            GetOrCreateSubdirectory(cache, cache->root->cached_dir, fName, len);
+            entry = GetOrCreateSubdirectory(cache, parentDir->cached_dir, fName, len);
         }
         else if (attribs->type == NF3REG)
         {
@@ -760,7 +681,7 @@ int populateCache_cb(const char* fName, uint64_t fileId,
             buf[0] = '/';
             memcpy(buf + 1, fName, len);
             buf[len + 1] = '\0';
-            meta_data_entry_t* entry = CreateEntry(cache, buf, len + 1);
+            entry = CreateEntry(cache, buf, len + 1);
             entry->type = ENTRY_TYPE_FILE;
         }
         else
@@ -771,6 +692,11 @@ int populateCache_cb(const char* fName, uint64_t fileId,
     else
     {
         printf("No attribs for: %s\n", fName);
+    }
+    if (handle)
+    {
+        printFileHandle(handle);
+        entry->handle = handleToPtr(cache, handle);
     }
 
     return 1;
@@ -871,6 +797,7 @@ int main(int argc, char* argv[])
     cache_t dirCache;
     InitCache(&dirCache);
 
+    populate_cache_cb_args_t args = {&dirCache, dirCache.root};
     struct search_dir_t searchResult = {"ll.txt"};
 
     for(;;) {
@@ -878,7 +805,7 @@ int main(int argc, char* argv[])
         int shouldContinueReading =
         nfs_readdirplus(nfs_fd, &fh
               , &cookie, &verifier
-              , populateCache_cb, &dirCache
+              , populateCache_cb, &args
         );
         if (!shouldContinueReading)
             break;
@@ -896,7 +823,9 @@ int main(int argc, char* argv[])
         {
             printf("d");
         }
-        printf("\t%s\n", dirCache.name_cache + (entry->name.v - 4));
+        printf("\t%s\n", dirCache.name_stringtable + (entry->name.v - 4));
+        const fhandle3 handle = ptrToHandle(&dirCache, entry->handle);
+        printFileHandle(&handle);
     }
 
 
