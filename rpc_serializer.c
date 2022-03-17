@@ -147,8 +147,16 @@ static inline void RPCDeserializer_RefillBuffer(RPCDeserializer* self)
     memmove(self->BufferPtr, self->ReadPtr, oldSize);
     int RecivedBytes =
         recv(self->SockFd, self->BufferPtr + oldSize, self->MaxBuffer - oldSize, 0);
+    int missing_bytes = self->MaxBuffer - (oldSize + RecivedBytes);
     self->FragmentSizeLeft -= RecivedBytes;
     self->Size = oldSize + RecivedBytes;
+    // TODO have a look at this again
+    if (missing_bytes && (self->FragmentSizeLeft) > missing_bytes)
+    {
+        int recived = recv(self->SockFd, self->BufferPtr + self->Size, missing_bytes, 0);
+        self->Size += recived;
+        self->FragmentSizeLeft  -= recived;
+    }
     self->ReadPtr = (const uint32_t*)self->BufferPtr;
 }
 

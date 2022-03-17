@@ -553,10 +553,10 @@ int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
     RPCSerializer_PushU32(&s, cookie_verif_hi);
     RPCSerializer_PushU32(&s, cookie_verif_lw);
 
-    RPCSerializer_PushU32(&s, 3000);
+    RPCSerializer_PushU32(&s, 4096);
     // max size of attribs ... it's recommeded that that's shorter than max size
 
-    RPCSerializer_PushU32(&s, 4000); // max size of result structure
+    RPCSerializer_PushU32(&s, 32768); // max size of result structure
 
     RPCSerializer_Finalize(&s);
     RPCSerializer_Send(&s, nfs_fd);
