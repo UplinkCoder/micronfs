@@ -298,6 +298,7 @@ Lexists:
     toc_entry->entry_key = full_path_key;
     toc_entry->relative_name_pointer =
         GetOrAddNameByKey(cache, full_path, full_path_key);
+    toc_entry->entry = result;
 
 Lret:
     return result;

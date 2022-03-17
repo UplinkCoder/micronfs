@@ -5,13 +5,12 @@
 #  pragma comment(lib, "ws2_32.lib")
 #  include "stdint_msvc.h"
 #else
+#  define _BSD_SOURCE 1
 #  include <sys/socket.h>
 #  include <netinet/in.h>
 #  include <netdb.h>
 #  include <unistd.h>
-#  include <byteswap.h>
 #  include <sys/mman.h>
-#  define _BSD_SOURCE 1
 #endif
 
 #ifndef _cpluslplus
@@ -250,7 +249,6 @@ portmap_dump_res* portmap_dump(int sock_fd)
     bool accepted = RPCDeserializer_ReadBool(&d);
 
     RPCDeserializer_SkipAuth(&d);
-
 
     nfsstat3 status = RPCDeserializer_ReadU32(&d);
 
