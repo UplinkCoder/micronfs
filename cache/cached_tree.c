@@ -55,7 +55,7 @@ fhandle3 ptrToHandle(cache_t* cache, filehandle_ptr_t fh_ptr)
     fhandle3 result = {{0}};
 
     const uint32_t ptr = fh_ptr.v & ((1 << 27) - 1);
-    const uint32_t compressed_bit = (fh_ptr.v >> 31);
+    const uint32_t compressed_bit = (fh_ptr.v & (1 << 31));
     const uint32_t ptr_length = ((fh_ptr.v >> 27) & 15);
     if (fh_ptr.v == 0)
     {
@@ -64,15 +64,17 @@ fhandle3 ptrToHandle(cache_t* cache, filehandle_ptr_t fh_ptr)
     int start_copy_limbs   = 0;
     int limbs_to_be_copied = ptr_length;
 
-    if (compressed_bit & 1)
+    if (compressed_bit)
     {
-        (*((uint32_t*)(result.fhandle3) + 0)) = 0x1000001;
-        (*((uint32_t*)(result.fhandle3) + 1)) = (*((uint32_t*)(cache->rootHandle.fhandle3 + 4)));
-        (*((uint32_t*)(result.fhandle3) + 2)) = (*((uint32_t*)(cache->rootHandle.fhandle3 + 8)));
+        (*(((uint32_t*)result.fhandle3) + 0)) = 0x1000001;
+        (*(((uint32_t*)result.fhandle3) + 1)) = (*((uint32_t*)(cache->rootHandle.fhandle3 + 4)));
+        (*(((uint32_t*)result.fhandle3) + 2)) = (*((uint32_t*)(cache->rootHandle.fhandle3 + 8)));
         start_copy_limbs = 3;
     }
 
-    uint32_t* limb_start = cache->limbs + ptr + start_copy_limbs;
+    uint32_t* limb_start = cache->limbs + ptr;
+
+    // printf("Limbs to be copied: %d\n", limbs_to_be_copied);
 
     uint32_t* one_past_last = cache->limbs + ptr + limbs_to_be_copied;
     for(uint32_t* limb = limb_start;
@@ -94,11 +96,18 @@ filehandle_ptr_t handleToPtr(cache_t* cache, const fhandle3* handle)
     uint32_t handle_length = (fhandle3_length(handle) >> 2);
     assert(handle_length < 16);
 
+    if(!memcmp(cache->rootHandle.fhandle3, handle->fhandle3, sizeof(fhandle3)))
+    {
+        goto Lret;
+    }
 
     if (handle_limbs[0] == 0x1000001)
     {
-        if (handle_limbs[1] == ((uint32_t*)(cache->rootHandle.fhandle3))[1]
-         && handle_limbs[2] == ((uint32_t*)(cache->rootHandle.fhandle3))[2])
+        const uint32_t root1 = (*(((uint32_t*) cache->rootHandle.fhandle3) + 1));
+        const uint32_t root2 = (*(((uint32_t*) cache->rootHandle.fhandle3) + 2));
+
+        if (handle_limbs[1] == root1
+         && handle_limbs[2] == root2)
          {
              result.v |= (1 << 31);
              handle_length -= 3;
@@ -118,9 +127,8 @@ filehandle_ptr_t handleToPtr(cache_t* cache, const fhandle3* handle)
     {
         *dst_limb = *handle_limbs++;
     }
-
     cache->limbs_size += handle_length;
-
+Lret:
     return result;
 }
 

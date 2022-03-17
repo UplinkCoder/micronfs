@@ -695,7 +695,6 @@ int populateCache_cb(const char* fName, const fhandle3* handle,
     }
     if (handle)
     {
-        printFileHandle(handle);
         entry->handle = handleToPtr(cache, handle);
     }
 
@@ -796,7 +795,7 @@ int main(int argc, char* argv[])
 
     cache_t dirCache;
     InitCache(&dirCache);
-
+    dirCache.rootHandle = fh;
     populate_cache_cb_args_t args = {&dirCache, dirCache.root};
     struct search_dir_t searchResult = {"ll.txt"};
 
@@ -819,16 +818,21 @@ int main(int argc, char* argv[])
     for(meta_data_entry_t* entry = root.entries;
          entry < one_past_last_entry; entry++)
     {
+        printf("%d: ", entry - root.entries);
         if (entry->type == ENTRY_TYPE_DIRECTORY)
         {
             printf("d");
+        }
+        if (entry->handle.v & (31 << 1))
+        {
+            printf(" c");
         }
         printf("\t%s\n", dirCache.name_stringtable + (entry->name.v - 4));
         const fhandle3 handle = ptrToHandle(&dirCache, entry->handle);
         printFileHandle(&handle);
     }
 
-
+    printf("Used %d bytes for handles\n", dirCache.limbs_size * 4);
     if(handleSum(&searchResult.result_handle))
     {
        printFileHandle(&searchResult.result_handle);
