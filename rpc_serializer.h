@@ -152,8 +152,16 @@ static inline void RPCSerializer_PushU32(RPCSerializer* self, uint32_t value)
     self->Size += 4;
 }
 
+static inline int32_t RPCDeserializer_BufferLeft(RPCDeserializer* self)
+{
+    int32_t result = self->Size -
+                      ((self->ReadPtr - (u32*)self->BufferPtr) * sizeof(u32));
+    return result;
+}
+
 static inline const uint32_t RPCDeserializer_ReadU32(RPCDeserializer* self)
 {
+    assert(RPCDeserializer_BufferLeft(self) >= 4);
     const uint32_t result = HTONL(*self->ReadPtr);
     self->ReadPtr++;
     return result;
@@ -161,14 +169,8 @@ static inline const uint32_t RPCDeserializer_ReadU32(RPCDeserializer* self)
 
 static inline int RPCDeserializer_ReadBool(RPCDeserializer *self)
 {
+    assert(RPCDeserializer_BufferLeft(self) >= 4);
     return (*self->ReadPtr++ != 0);
-}
-
-static inline int32_t RPCDeserializer_BufferLeft(RPCDeserializer* self)
-{
-    int32_t result = self->Size -
-                      ((self->ReadPtr - (u32*)self->BufferPtr) * sizeof(u32));
-    return result;
 }
 
 void RPCDeserializer_Init(RPCDeserializer* self, SOCKET sock_fd);

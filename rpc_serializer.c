@@ -130,13 +130,15 @@ void RPCDeserializer_Init(RPCDeserializer* self, SOCKET sock_fd)
 RPCHeader RPCDeserializer_RecvHeader(RPCDeserializer* self)
 {
     self->Size = recv(self->SockFd, self->BufferPtr, self->MaxBuffer, 0);
+    // printf("initial recv: %d\n", self->Size);
     assert(self->Size >= sizeof(RPCHeader));
 
     const uint32_t size_final = HTONL(*self->ReadPtr); self->ReadPtr++;
     const uint32_t xid = HTONL(*self->ReadPtr); self->ReadPtr++;
     const int reply = (*self->ReadPtr++) != 0;
     self->FragmentSizeLeft = (size_final & ~(1 << 31));
-    self->FragmentSizeLeft -= self->Size;
+    // don't count the size field
+    self->FragmentSizeLeft -= (self->Size - 4);
     return (RPCHeader){size_final, xid, reply};
 }
 
@@ -145,18 +147,26 @@ static inline void RPCDeserializer_RefillBuffer(RPCDeserializer* self)
     const int32_t oldSize = RPCDeserializer_BufferLeft(self);
     assert(oldSize >= 0);
     memmove(self->BufferPtr, self->ReadPtr, oldSize);
+
     int RecivedBytes =
         recv(self->SockFd, self->BufferPtr + oldSize, self->MaxBuffer - oldSize, 0);
+    // printf("Refill recv: %d\n", RecivedBytes);
     int missing_bytes = self->MaxBuffer - (oldSize + RecivedBytes);
+
     self->FragmentSizeLeft -= RecivedBytes;
     self->Size = oldSize + RecivedBytes;
     // TODO have a look at this again
-    if (missing_bytes && (self->FragmentSizeLeft) > missing_bytes)
+    if (self->FragmentSizeLeft < missing_bytes)
+        missing_bytes = self->FragmentSizeLeft;
+
+    if (missing_bytes)
     {
-        int recived = recv(self->SockFd, self->BufferPtr + self->Size, missing_bytes, 0);
-        self->Size += recived;
-        self->FragmentSizeLeft  -= recived;
+        RecivedBytes = recv(self->SockFd, self->BufferPtr + self->Size, missing_bytes, 0);
+        // printf("Refill recv (again): %d\n", RecivedBytes);
+        self->Size += RecivedBytes;
+        self->FragmentSizeLeft  -= RecivedBytes;
     }
+
     self->ReadPtr = (const uint32_t*)self->BufferPtr;
 }
 
@@ -208,7 +218,9 @@ fhandle3 RPCDeserializer_ReadFileHandle(RPCDeserializer* self)
 {
     fhandle3 result = {{0}};
 
+    RPCDeserializer_EnsureSize(self, 4);
     const uint32_t length = HTONL(*self->ReadPtr); self->ReadPtr++;
+    RPCDeserializer_EnsureSize(self, length);
     const uint8_t* fhReadPtr = (const uint8_t*) self->ReadPtr;
 
     self->ReadPtr += (length >> 2) + !!(length & 3);
@@ -224,6 +236,7 @@ fhandle3 RPCDeserializer_ReadFileHandle(RPCDeserializer* self)
 
 fattr3 RPCDeserializer_ReadFileAttribs(RPCDeserializer* self)
 {
+    RPCDeserializer_EnsureSize(self, sizeof(fattr3));
     fattr3 result;
 
     const uint32_t* ReadPtr = self->ReadPtr;
@@ -270,6 +283,7 @@ fattr3 RPCDeserializer_ReadFileAttribs(RPCDeserializer* self)
 
 uint64_t RPCDeserializer_ReadU64(RPCDeserializer* self)
 {
+    assert(RPCDeserializer_BufferLeft(self) >= 8);
     uint64_t result;
 
     result = HTONL(*self->ReadPtr); self->ReadPtr++;

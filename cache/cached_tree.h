@@ -64,6 +64,8 @@ typedef struct cached_dir_t
     uint32_t entries_capacity; /// how many entries are allocated in the entries array
 
     meta_data_entry_t* entries;
+
+    name_cache_ptr_t fullPath;
 } cached_dir_t;
 
 typedef enum entry_type_t {
@@ -140,8 +142,8 @@ name_cache_ptr_t GetOrAddName(cache_t* cache, const char* name);
 name_cache_ptr_t GetOrAddNameLength(cache_t* cache, const char* name,
                                     size_t length);
 
-meta_data_entry_t* CreateEntry(cache_t* cache, const char* full_path,
-                               size_t path_length);
+meta_data_entry_t* CreateEntryInDirectoryByKey(cache_t* cache, cached_dir_t* parentDir,
+                                               const char* name, uint32_t entry_key);
 
 void ResetCache(cache_t* cache);
 

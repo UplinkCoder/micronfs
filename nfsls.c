@@ -6,6 +6,7 @@
 #  include "stdint_msvc.h"
 #else
 #  define _BSD_SOURCE 1
+#  define _DEFAULT_SOURCE 1
 #  include <sys/socket.h>
 #  include <netinet/in.h>
 #  include <netdb.h>
@@ -14,7 +15,7 @@
 #endif
 
 #ifndef _cpluslplus
-#include <stdbool.h>
+#  include <stdbool.h>
 #endif
 
 #include <stdio.h>
@@ -102,12 +103,12 @@ void PushUnixAuthN(RPCSerializer* self)
 
 void InitCache(cache_t* cache)
 {
-    uint32_t initial_name_storage_capacity = 8192;
-    uint32_t initial_name_nodes_capacity = 256;
-    uint32_t initial_metadata_nodes = 512;
-    uint32_t initial_dir_nodes = 256;
-    uint32_t initial_toc_capacity = 256;
-    uint32_t initial_limb_capacity = 512;
+    uint32_t initial_name_storage_capacity = 65536;
+    uint32_t initial_name_nodes_capacity = 4096;
+    uint32_t initial_metadata_nodes = 16384 * 4;
+    uint32_t initial_dir_nodes = 1024;
+    uint32_t initial_toc_capacity = 1024;
+    uint32_t initial_limb_capacity = 16384;
 
     uint8_t* cache_memory = (uint8_t*) malloc(
         sizeof(cache_t) + initial_name_storage_capacity
@@ -157,7 +158,8 @@ void InitCache(cache_t* cache)
         .limbs_capacity = initial_limb_capacity
     };
 
-    cache->root->cached_dir = dirs_mem++;
+    cache->root->cached_dir = cache->dir_entries + cache->dir_entries_size++;
+    cache->root->cached_dir->fullPath = GetOrAddName(cache, "/");
 
     ResetCache(cache);
 }
@@ -390,7 +392,7 @@ int64_t nfs_read(SOCKET nfs_fd, const fhandle3* file
     int accept_state = RPCDeserializer_ReadBool(&d);
 
     nfsstat3 status = RPCDeserializer_ReadU32(&d);
-    printf("Status: %s\n", nfsstat3_toChars(status));
+    if (status != 0) printf("Status: %s\n", nfsstat3_toChars(status));
     // -----------------------------------------------------
 
     if (status)
@@ -480,7 +482,7 @@ int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
     int accept_state = RPCDeserializer_ReadBool(&d);
 
     nfsstat3 status = RPCDeserializer_ReadU32(&d);
-    printf("Status: %s\n", nfsstat3_toChars(status));
+    if (status != 0) printf("Status: %s\n", nfsstat3_toChars(status));
     // -------------------------------------------------------------------
 
     int hasAttrs = RPCDeserializer_ReadBool(&d);
@@ -496,20 +498,20 @@ int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
     int shouldContinueReading;
     while (hasNext)
     {
+        RPCDeserializer_EnsureSize(&d, 12);
         char name_buffer[1024];
         char* namePtr = name_buffer;
         uint64_t fileid  = RPCDeserializer_ReadU64(&d);
         uint32_t name_length = RPCDeserializer_ReadU32(&d);
 
         // the name might be longer than our buffer can hold
-        if ((RPCDeserializer_BufferLeft(&d) - 192) < (int32_t)name_length)
-        {
-            RPCDeserializer_EnsureSize(&d, ALIGN4(name_length + 124));
-        }
+        RPCDeserializer_EnsureSize(&d, ALIGN4(name_length));
         const char* name  = RPCDeserializer_ReadString(&d, &namePtr, name_length);
         uint32_t afterNameBufferLeft = RPCDeserializer_BufferLeft(&d);
 
+        RPCDeserializer_EnsureSize(&d, 12);
         lastCookie = RPCDeserializer_ReadU64(&d);
+
         const fattr3* attribsPtr = 0;
         if (RPCDeserializer_ReadBool(&d))
         {
@@ -517,6 +519,7 @@ int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
             attribsPtr = &attribs;
         }
         const fhandle3* handlePtr = 0;
+        RPCDeserializer_EnsureSize(&d, 4);
         if (RPCDeserializer_ReadBool(&d))
         {
             const fhandle3 handle = RPCDeserializer_ReadFileHandle(&d);
@@ -539,6 +542,7 @@ int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
             }
             goto Lreturn;
         }
+        RPCDeserializer_EnsureSize(&d, 4);
         hasNext = RPCDeserializer_ReadBool(&d);
     }
     // printf("Writing lastCookie into ptr");
@@ -592,7 +596,7 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir
     int accept_state = RPCDeserializer_ReadBool(&d);
     nfsstat3 status = RPCDeserializer_ReadU32(&d);
 
-    printf("Status: %s\n", nfsstat3_toChars(status));
+    if (status != 0) printf("Status: %s\n", nfsstat3_toChars(status));
 
     bool hasAttrs = RPCDeserializer_ReadBool(&d);
     if (hasAttrs)
@@ -673,20 +677,36 @@ int populateCache_cb(const char* fName, const fhandle3* handle,
     {
         if (attribs->type == NF3DIR)
         {
+            if (!parentDir->cached_dir)
+            {
+                parentDir->cached_dir = cache->dir_entries + cache->dir_entries_size++;
+            }
             entry = GetOrCreateSubdirectory(cache, parentDir->cached_dir, fName, len);
+            if (fName[0] != '.')
+            {
+                // printf("reading dir: %s\n", fName);
+                uint64_t cookie = 0;
+                uint64_t verifier = 0;
+                populate_cache_cb_args_t newArgs = {
+                    args->cache, entry
+                };
+
+                SOCKET newSock = connect_name("192.168.178.26", "2049");
+                nfs_readdirplus(newSock, handle, &cookie, &verifier
+                  , populateCache_cb, &newArgs);
+                close(newSock);
+            }
         }
         else if (attribs->type == NF3REG)
         {
-            char buf[512];
-            buf[0] = '/';
-            memcpy(buf + 1, fName, len);
-            buf[len + 1] = '\0';
-            entry = CreateEntry(cache, buf, len + 1);
+            const uint32_t entry_key = EntryKey(fName, len);
+            entry = CreateEntryInDirectoryByKey(cache, parentDir->cached_dir, fName, entry_key);
             entry->type = ENTRY_TYPE_FILE;
         }
         else
         {
-            printf("Unexpected type: %s on file: %s", ftype3_toChars(attribs->type), fName);
+            printf("Unexpected type: %s on file: %s\n", ftype3_toChars(attribs->type), fName);
+            return 1;
         }
     }
     else
@@ -823,16 +843,13 @@ int main(int argc, char* argv[])
         {
             printf("d");
         }
-        if (entry->handle.v & (31 << 1))
-        {
-            printf(" c");
-        }
         printf("\t%s\n", dirCache.name_stringtable + (entry->name.v - 4));
         const fhandle3 handle = ptrToHandle(&dirCache, entry->handle);
-        printFileHandle(&handle);
+        // printFileHandle(&handle);
     }
 
     printf("Used %d bytes for handles\n", dirCache.limbs_size * 4);
+    printf("Created %d entires\n", dirCache.metadata_size);
     if(handleSum(&searchResult.result_handle))
     {
        printFileHandle(&searchResult.result_handle);
