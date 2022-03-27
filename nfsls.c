@@ -105,6 +105,8 @@ void InitCache(cache_t* cache)
 {
     uint32_t initial_name_storage_capacity = 65536;
     uint32_t initial_name_nodes_capacity = 4096;
+    uint32_t initial_files_capacity = 16384;
+    
     uint32_t initial_metadata_nodes = 16384 * 4;
     uint32_t initial_dir_nodes = 1024;
     uint32_t initial_toc_capacity = 1024;
@@ -130,6 +132,10 @@ void InitCache(cache_t* cache)
 
     uint32_t* limbs_mem = (uint32_t*) calloc(
         initial_limb_capacity , sizeof(uint32_t));
+        
+    cached_file_t* files_mem = (cached_file_t*)
+        calloc(initial_files_capacity, sizeof(cached_file_t));
+    
 
     *cache = (cache_t) {
         .toc_entries = toc_mem,
@@ -152,6 +158,10 @@ void InitCache(cache_t* cache)
         .dir_entries = dirs_mem,
         .dir_entries_size = 0,
         .dir_entries_capacity = initial_dir_nodes,
+
+        .file_entries = files_mem,
+        .file_entries_size = 0,
+        .file_entries_capacity = initial_files_capacity,
 
         .limbs = limbs_mem,
         .limbs_size = 0,
@@ -513,11 +523,16 @@ int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
         lastCookie = RPCDeserializer_ReadU64(&d);
 
         const fattr3* attribsPtr = 0;
+        uint32_t bufferLeftBeforeAttribs;
         if (RPCDeserializer_ReadBool(&d))
         {
+            bufferLeftBeforeAttribs = RPCDeserializer_BufferLeft(&d);
             const fattr3 attribs = RPCDeserializer_ReadFileAttribs(&d);
             attribsPtr = &attribs;
         }
+        printf("AttribsSize: %d ... %d\n",
+            bufferLeftBeforeAttribs - RPCDeserializer_BufferLeft(&d),
+            sizeof(fattr3));
         const fhandle3* handlePtr = 0;
         RPCDeserializer_EnsureSize(&d, 4);
         if (RPCDeserializer_ReadBool(&d))
@@ -702,6 +717,10 @@ int populateCache_cb(const char* fName, const fhandle3* handle,
             const uint32_t entry_key = EntryKey(fName, len);
             entry = CreateEntryInDirectoryByKey(cache, parentDir->cached_dir, fName, entry_key);
             entry->type = ENTRY_TYPE_FILE;
+            entry->cached_file = cache->file_entries + cache->file_entries_size++;
+            entry->cached_file->crc32 = 0;
+            entry->cached_file->data = 0;
+            entry->cached_file->size = attribs->size;
         }
         else
         {
@@ -839,15 +858,28 @@ int main(int argc, char* argv[])
          entry < one_past_last_entry; entry++)
     {
         printf("%d: ", entry - root.entries);
+        printf("\t%s\n", dirCache.name_stringtable + (entry->name.v - 4));
+
         if (entry->type == ENTRY_TYPE_DIRECTORY)
         {
             printf("d");
+            for(meta_data_entry_t* e = entry->cached_dir->entries;
+                e < entry->cached_dir->entries + entry->cached_dir->entries_size;
+                e++)
+            {
+                printf("\t\t%s\n", dirCache.name_stringtable + (e->name.v -4));
+            }
         }
-        printf("\t%s\n", dirCache.name_stringtable + (entry->name.v - 4));
         const fhandle3 handle = ptrToHandle(&dirCache, entry->handle);
         // printFileHandle(&handle);
     }
-
+    meta_data_entry_t* div =
+        LookupInDirectory(&dirCache, dirCache.root->cached_dir, "division.html", strlen("division.html"));
+    if (div && div->type == ENTRY_TYPE_FILE) 
+    {
+        cached_file_t file = *div->cached_file;
+        printf("div: %d %d --- %s\n", div->type, file.size, dirCache.name_stringtable + (div->name.v - 4));
+    }
     printf("Used %d bytes for handles\n", dirCache.limbs_size * 4);
     printf("Created %d entires\n", dirCache.metadata_size);
     if(handleSum(&searchResult.result_handle))

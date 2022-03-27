@@ -114,6 +114,10 @@ typedef struct cache_t
     cached_dir_t* dir_entries;
     uint32_t dir_entries_size;
     uint32_t dir_entries_capacity;
+    
+    cached_file_t* file_entries;
+    uint32_t file_entries_size;
+    uint32_t file_entries_capacity;
 
     uint32_t* limbs;
     uint32_t limbs_size;
@@ -144,6 +148,8 @@ name_cache_ptr_t GetOrAddNameLength(cache_t* cache, const char* name,
 
 meta_data_entry_t* CreateEntryInDirectoryByKey(cache_t* cache, cached_dir_t* parentDir,
                                                const char* name, uint32_t entry_key);
+
+const char* toCharPtr(cache_t* cache, name_cache_ptr_t ptr);
 
 void ResetCache(cache_t* cache);
 
