@@ -186,4 +186,6 @@ uint64_t RPCDeserializer_ReadU64(RPCDeserializer* self);
 int32_t RPCDeserializer_BufferLeft(RPCDeserializer* self);
 void RPCDeserializer_EnsureSize(RPCDeserializer* self, uint32_t sz);
 
-#define ALIGN4(VAR) (((VAR) + 3) & ~3)
+#ifndef ALIGN4
+#  define ALIGN4(VAR) (((VAR) + 3) & ~3)
+#endif

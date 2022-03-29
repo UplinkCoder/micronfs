@@ -114,7 +114,7 @@ typedef struct cache_t
     cached_dir_t* dir_entries;
     uint32_t dir_entries_size;
     uint32_t dir_entries_capacity;
-    
+
     cached_file_t* file_entries;
     uint32_t file_entries_size;
     uint32_t file_entries_capacity;

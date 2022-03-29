@@ -106,10 +106,10 @@ void InitCache(cache_t* cache)
     uint32_t initial_name_storage_capacity = 65536;
     uint32_t initial_name_nodes_capacity = 4096;
     uint32_t initial_files_capacity = 16384;
-    
+
     uint32_t initial_metadata_nodes = 16384 * 4;
-    uint32_t initial_dir_nodes = 1024;
-    uint32_t initial_toc_capacity = 1024;
+    uint32_t initial_dir_nodes = 2048;
+    uint32_t initial_toc_capacity = 2048;
     uint32_t initial_limb_capacity = 16384;
 
     uint8_t* cache_memory = (uint8_t*) malloc(
@@ -132,10 +132,10 @@ void InitCache(cache_t* cache)
 
     uint32_t* limbs_mem = (uint32_t*) calloc(
         initial_limb_capacity , sizeof(uint32_t));
-        
+
     cached_file_t* files_mem = (cached_file_t*)
         calloc(initial_files_capacity, sizeof(cached_file_t));
-    
+
 
     *cache = (cache_t) {
         .toc_entries = toc_mem,
@@ -213,7 +213,6 @@ uint16_t portmap_getport(int sock_fd,
     bool accepted = RPCDeserializer_ReadBool(&d);
 
     RPCDeserializer_SkipAuth(&d);
-
 
     nfsstat3 status = RPCDeserializer_ReadU32(&d);
     uint32_t port = RPCDeserializer_ReadU32(&d);

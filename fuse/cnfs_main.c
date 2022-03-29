@@ -36,6 +36,7 @@
 #include <stdlib.h>
 
 #include "../micronfs.h"
+#include "../cache/cached_tree.h"
 
 typedef struct fileList_t {
     const char* name;
@@ -89,6 +90,8 @@ static void *cnfs_init(struct fuse_conn_info *conn)
 static int logSize = 0;
 char (*log_buffer)[65536] = 0;
 static struct stat logStat;
+static cache_t dirCache;
+
 static void AddLog_(const char* msg, int len)
 {
     len = (len ? len : strlen(msg));
@@ -157,23 +160,22 @@ static int cnfs_getattr(const char *path, struct stat *stbuf)
         *stbuf = logStat;
     } else
     {
-        fileList_t* entry = rootDir;
-        char* mPath = path + 1;
-        entry = TraverseDownTo(&mPath);
+        meta_data_entry_t* entry =
+            LookupPath(&dirCache, path, strlen(path));
 
         if (entry)
         {
-            int isDir = entry->bitarray_entires & (1 << 31);
+            int isDir = entry->type == ENTRY_TYPE_DIRECTORY;
             printf("Got entry\n");
             if (isDir)
             {
         		stbuf->st_mode = S_IFDIR | 0755;
-		        stbuf->st_nlink = 2 + entry->n_entires;
+		        stbuf->st_nlink = 2 + entry->cached_dir->entries_size;
             }
             else
             {
         		stbuf->st_mode = S_IFREG | 0444;
-                stbuf->st_size = entry->size;
+                stbuf->st_size = entry->cached_file->size;
                 stbuf->st_nlink = 1;
             }
         }
@@ -205,24 +207,47 @@ static int cnfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
 	filler(buf, ".", NULL,  0);
 	filler(buf, "..", NULL, 0);
-    for(int i = 0; i < currentDir->n_entires; i++)
-    {
-        fileList_t* entry = currentDir->entries + i;
-        struct stat s;
-        if (!entry->bitarray_entires)
-        {
-            s.st_size = entry->size;
-        }
-        filler(buf, entry->name, &s, 0);
-    }
-    if (currentDir == rootDir
-        || !path
-        || path[0] == '/' && path[1] == '\0')
+
+    meta_data_entry_t* e =
+        LookupPath(&dirCache, path, strlen(path));
+
+    if (path[0] == '/' && path[1] == '\0')
     {
         filler(buf, "log", &logStat, 0);
-        filler(buf, options.filename, NULL,  0);
+        // filler(buf, options.filename, NULL,  0);
+        e = dirCache.root;
     }
-    
+    else
+    {
+        if (e)
+        {
+            assert(e->type == ENTRY_TYPE_DIRECTORY);
+        }
+        else
+        {
+            return -ENOENT;
+        }
+    }
+
+
+    meta_data_entry_t* onePastLast =
+        e->cached_dir->entries + e->cached_dir->entries_size;
+
+    for(meta_data_entry_t* ent = e->cached_dir->entries;
+        ent < onePastLast; ent++)
+    {
+        struct stat s;
+        if (ent->type == ENTRY_TYPE_FILE)
+        {
+            s.st_size = ent->cached_file->size;
+            s.st_mode = S_IFREG;
+        }
+        else if (ent->type == ENTRY_TYPE_FILE)
+        {
+            s.st_mode = S_IFDIR;
+        }
+        filler(buf, toCharPtr(&dirCache, ent->name), &s, 0);
+    }
 
 	return 0;
 }
@@ -245,19 +270,6 @@ static const char* EatAndCountDotDotPath(const char* path, int* levels_upP)
     *levels_upP = levels_up;
 
     return path;
-}
-
-fileList_t* TraverseUp(fileList_t* dir, int levelsUp)
-{
-    while(levelsUp--)
-    {
-        if (!dir->parent)
-            break;
-        else
-            dir = dir->parent;
-    }
-
-    return dir;
 }
 
 int AddDir(fileList_t* parent, const char* newDirName)
@@ -318,7 +330,7 @@ fileList_t* TraverseDownTo_(const char** mPathP, bool stopAtDir)
     );
     fileList_t* parent = rootDir;
     fileList_t* result = rootDir;
-    
+
     const char *resultPath =  *mPathP;
     const char *mPath = resultPath;
     char c = *mPath;
@@ -343,7 +355,7 @@ fileList_t* TraverseDownTo_(const char** mPathP, bool stopAtDir)
                 }
             }
     }
-    
+
 
     if ((bitfield & (1 << 31)) == 0)
         return 0;
@@ -379,7 +391,7 @@ fileList_t* TraverseDownTo_(const char** mPathP, bool stopAtDir)
             }
             component_storage[len] = '\0';
             printf ("found componenet: '%s'\n", component_storage);
-            int lastComponent = (strlen(mPath) == len); 
+            int lastComponent = (strlen(mPath) == len);
             {
                 pastLastEntry = parent->entries + parent->n_entires;
                 for(canidate = result->entries;
@@ -406,7 +418,7 @@ Lfound:
             resultPath = mPath;
         }
     }
-    
+
 Lend:
     if (result) printf("entry: %s\n", result->name);
     *mPathP = resultPath;
@@ -430,8 +442,9 @@ static int cnfs_mkdir (const char *path, mode_t mode)
     AddDir(parent, mPath);
 }
 
-static int CheckAccess(fileList_t* entry, uint32_t accessFlags)
+static int CheckAccess(meta_data_entry_t* entry, uint32_t accessFlags)
 {
+    // -EACCES
     return 0;
 }
 
@@ -442,7 +455,8 @@ static int cnfs_open(const char *path, struct fuse_file_info *fi)
         return 0;
     }
     char* mPath = path + 1;
-    fileList_t* entry = TraverseDownTo(&mPath);
+    meta_data_entry_t* entry = LookupPath(&dirCache, path, strlen(path));
+
     if (entry)
     {
         return CheckAccess(entry, (fi->flags & O_ACCMODE));
@@ -492,18 +506,25 @@ static int cnfs_read(const char *path, char *buf, size_t size, off_t offset,
     else
     {
         AddLog("reading file: %s", path);
+
+        meta_data_entry_t* entry =
+            LookupPath(&dirCache, path, strlen(path));
+
+        if (entry->type == ENTRY_TYPE_FILE)
+        {
+            len = entry->cached_file->size;
+
+            if (offset < len) {
+                if (offset + size > logSize)
+                    size = logSize - offset;
+                memcpy(buf, entry->cached_file->data + offset, size);
+            } else
+                size = 0;
+        }
+        else
+            return -ENOENT;
     }
 
-	if(strcmp(path+1, options.filename) != 0)
-		return -ENOENT;
-
-	len = strlen(options.contents);
-	if (offset < len) {
-		if (offset + size > len)
-			size = len - offset;
-		memcpy(buf, options.contents + offset, size);
-	} else
-		size = 0;
 
 	return size;
 }
@@ -528,6 +549,86 @@ static void show_help(const char *progname)
 	       "\n");
 }
 
+void InitCache(cache_t* cache)
+{
+    uint32_t initial_name_storage_capacity = 65536;
+    uint32_t initial_name_nodes_capacity = 4096;
+    uint32_t initial_files_capacity = 16384;
+
+    uint32_t initial_metadata_nodes = 16384 * 4;
+    uint32_t initial_dir_nodes = 2048;
+    uint32_t initial_toc_capacity = 2048;
+    uint32_t initial_limb_capacity = 16384;
+
+    uint8_t* cache_memory = (uint8_t*) malloc(
+        sizeof(cache_t) + initial_name_storage_capacity
+                        + (initial_name_nodes_capacity *
+                            sizeof(name_cache_node_t)));
+
+    toc_entry_t* toc_mem = (toc_entry_t*) calloc(
+        initial_toc_capacity, sizeof(toc_entry_t));
+
+    name_cache_node_t* tree_mem = (name_cache_node_t*)
+                                (cache_memory + sizeof(cache_t)
+                                + initial_name_storage_capacity);
+
+    meta_data_entry_t* meta_mem = (meta_data_entry_t*) calloc(
+        initial_metadata_nodes , sizeof(meta_data_entry_t));
+
+    cached_dir_t* dirs_mem = (cached_dir_t*)calloc(
+        initial_dir_nodes, sizeof(cached_dir_t));
+
+    uint32_t* limbs_mem = (uint32_t*) calloc(
+        initial_limb_capacity , sizeof(uint32_t));
+
+    cached_file_t* files_mem = (cached_file_t*)
+        calloc(initial_files_capacity, sizeof(cached_file_t));
+
+
+    *cache = (cache_t) {
+        .toc_entries = toc_mem,
+        .root = meta_mem++,
+
+        .toc_size = 0,
+        .toc_capacity = initial_toc_capacity,
+
+        .metadata_size = 1,
+        .metadata_capacity = initial_metadata_nodes,
+
+        .name_stringtable  = (char*)(cache_memory + sizeof(cache_t)),
+        .name_stringtable_size = 0,
+        .name_stringtable_capacity = initial_name_storage_capacity,
+
+        .name_cache_root = tree_mem,
+        .name_cache_node_size = 1,
+        .name_cache_node_capacity = initial_name_nodes_capacity,
+
+        .dir_entries = dirs_mem,
+        .dir_entries_size = 0,
+        .dir_entries_capacity = initial_dir_nodes,
+
+        .file_entries = files_mem,
+        .file_entries_size = 0,
+        .file_entries_capacity = initial_files_capacity,
+
+        .limbs = limbs_mem,
+        .limbs_size = 0,
+        .limbs_capacity = initial_limb_capacity
+    };
+
+    cache->root->cached_dir = cache->dir_entries + cache->dir_entries_size++;
+    cache->root->cached_dir->fullPath = GetOrAddName(cache, "/");
+
+    cache->root->cached_dir->entries = cache->root + cache->metadata_size;
+    cache->root->cached_dir->entries_size = 0;
+    cache->root->cached_dir->entries_capacity = 256;
+    cache->metadata_size += 256;
+
+
+    ResetCache(cache);
+}
+
+
 int main(int argc, char *argv[])
 {
 	int ret;
@@ -540,10 +641,11 @@ int main(int argc, char *argv[])
     freeListNodes = 4096;
     nextFree = (fileList_t*)malloc(sizeof(fileList_t) * freeListNodes);
     log_buffer = malloc(sizeof(char[65536]));
-    //setup the root entry
-    rootDir = nextFree++;
-    rootDir->bitarray_entires |= (1 << 31);
-    rootDir->name = "/";
+    // setup dir cache and dummy file
+    InitCache(&dirCache);
+    AddFile(&dirCache, "/dont_read_me",
+        "I told you not to read me\0",
+        strlen("I told you not to read me") + 1);
 
 	/* Set defaults -- we have to use strdup so that
 	   fuse_opt_parse can free the defaults if other
