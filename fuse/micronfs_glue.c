@@ -21,7 +21,7 @@
 #include <stdio.h>
 #include <sys/types.h>
 
-#include "cache/cached_tree.c"
+#include "../cache/cached_tree.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -34,9 +34,8 @@ struct sockaddr_in server;
 struct sockaddr_in m_client;
 struct sockaddr_in s_client;
 
-#include "srv.h"
-#include "micronfs.h"
-#include "rpc_serializer.h"
+#include "../micronfs.h"
+#include "../rpc_serializer.h"
 
 #ifndef MAP_UNINITIALIZED
 #  define MAP_UNINITIALIZED 0
@@ -170,6 +169,11 @@ void InitCache(cache_t* cache)
 
     cache->root->cached_dir = cache->dir_entries + cache->dir_entries_size++;
     cache->root->cached_dir->fullPath = GetOrAddName(cache, "/");
+    
+    cache->root->cached_dir->entries = cache->root + cache->metadata_size;
+    cache->root->cached_dir->entries_size = 0;
+    cache->root->cached_dir->entries_capacity = 256;
+    cache->metadata_size += 256;
 
     ResetCache(cache);
 }
@@ -529,9 +533,7 @@ int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
             const fattr3 attribs = RPCDeserializer_ReadFileAttribs(&d);
             attribsPtr = &attribs;
         }
-        printf("AttribsSize: %d ... %d\n",
-            bufferLeftBeforeAttribs - RPCDeserializer_BufferLeft(&d),
-            sizeof(fattr3));
+        
         const fhandle3* handlePtr = 0;
         RPCDeserializer_EnsureSize(&d, 4);
         if (RPCDeserializer_ReadBool(&d))
@@ -539,6 +541,7 @@ int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
             const fhandle3 handle = RPCDeserializer_ReadFileHandle(&d);
             handlePtr = &handle;
         }
+        printf("name: %s\n", name);
 
         if (!fileIter(name, handlePtr, attribsPtr, userData))
         {
@@ -699,7 +702,7 @@ int populateCache_cb(const char* fName, const fhandle3* handle,
             entry = GetOrCreateSubdirectory(cache, parentDir->cached_dir, fName, len);
             if (fName[0] != '.')
             {
-                // printf("reading dir: %s\n", fName);
+                printf("reading dir: %s\n", fName);
                 uint64_t cookie = 0;
                 uint64_t verifier = 0;
                 populate_cache_cb_args_t newArgs = {
@@ -757,7 +760,7 @@ uint32_t handleSum(const fhandle3* handle)
     return sum;
 }
 
-int main(int argc, char* argv[])
+extern int nfs_init_cache(cache_t* dirCache, int argc, char* argv[])
 {
 #ifdef _WIN32
 	WSADATA  wsaData;
@@ -812,13 +815,6 @@ int main(int argc, char* argv[])
     int mountd_fd = connect_name(hostname, port_str);
     assert(mountd_fd != -1);
 
-    mountlist_t* mounts = mountd_dump(mountd_fd);
-    for(mountlist_t* m = mounts; m; m = m->next)
-    {
-        printf("hostname: %s directory: %s\n",
-             m->hostname,  m->directory);
-    }
-
     fhandle3 fh = mountd_mnt(mountd_fd, "/nfs/git");
     printFileHandle(&fh);
 
@@ -832,12 +828,10 @@ int main(int argc, char* argv[])
     );
 */
 
-    cache_t dirCache;
-    InitCache(&dirCache);
-    dirCache.rootHandle = fh;
-    populate_cache_cb_args_t args = {&dirCache, dirCache.root};
-    struct search_dir_t searchResult = {"ll.txt"};
-
+    InitCache(dirCache);
+    dirCache->rootHandle = fh;
+    populate_cache_cb_args_t args = {dirCache, dirCache->root};
+    
     for(;;) {
         cookie3 old_cookie = cookie;
         int shouldContinueReading =
@@ -849,90 +843,9 @@ int main(int argc, char* argv[])
             break;
     }
 
-    cached_dir_t root = *dirCache.root->cached_dir;
+    cached_dir_t root = *dirCache->root->cached_dir;
     meta_data_entry_t* one_past_last_entry =
         root.entries + root.entries_size;
-
-    printf("root_entrires:\n");
-    for(meta_data_entry_t* entry = root.entries;
-         entry < one_past_last_entry; entry++)
-    {
-        printf("%d: ", entry - root.entries);
-        printf("\t%s\n", dirCache.name_stringtable + (entry->name.v - 4));
-
-        if (entry->type == ENTRY_TYPE_DIRECTORY)
-        {
-            printf("d");
-            for(meta_data_entry_t* e = entry->cached_dir->entries;
-                e < entry->cached_dir->entries + entry->cached_dir->entries_size;
-                e++)
-            {
-                printf("\t\t%s\n", dirCache.name_stringtable + (e->name.v -4));
-            }
-        }
-        const fhandle3 handle = ptrToHandle(&dirCache, entry->handle);
-        // printFileHandle(&handle);
-    }
-    meta_data_entry_t* div =
-        LookupInDirectory(&dirCache, dirCache.root->cached_dir, "division.html", strlen("division.html"));
-    if (div && div->type == ENTRY_TYPE_FILE) 
-    {
-        cached_file_t file = *div->cached_file;
-        printf("div: %d %d --- %s\n", div->type, file.size, dirCache.name_stringtable + (div->name.v - 4));
-    }
-    printf("Used %d bytes for handles\n", dirCache.limbs_size * 4);
-    printf("Created %d entires\n", dirCache.metadata_size);
-    if(handleSum(&searchResult.result_handle))
-    {
-       printFileHandle(&searchResult.result_handle);
-       char buf[512];
-       int size_read =
-            nfs_read(nfs_fd, &searchResult.result_handle, buf, sizeof(buf), 0);
-       buf[size_read] = '\0';
-
-       printf("data read: %s\n", buf);
-       // nfs_read(nfs_fs, &searchResult.handle
-    }
-
+    
     mountd_umnt(mountd_fd, "/nfs/git");
-
-#if 0
-    while(nfs_fd == -1)
-    {
-        printf("Calling accept\n");
-        nfs_fd = accept(sock, (struct sockaddr*)&s_client, &addr_len);
-    }
-
-    // send request
-
-    // read reply
-    int sz = recv(nfs_fd, recvbuffer, MAX_BUFFER_SIZE, 0);
-
-    printf ("We've got %d bytes yay\n", sz);
-    close(nfs_fd);
-
-
-    for(int i = 0; i < sz; i++)
-    {
-        printf("%x ", recvbuffer[i]);
-        if ((i & 3) == 3) printf("\n");
-    }
-    printf("\n");
-
-    RPCReply reply = *(RPCReply*)recvbuffer;
-
-    uint32_t network_order_xid = reply.header.xid;
-    // RPCReply_ByteFlip(&reply);
-    printf("xid: %d\n", network_order_xid);
-
-    int k = 12;
-
-    getchar();
-
-    //remove("test.txt");
-#endif
-    printf("It's time to say Goodbye :)\n");
-
-
-    // int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 }

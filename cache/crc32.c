@@ -17,7 +17,7 @@
 
 // exports
 
-EXTERN_C uint32_t crc32c(uint32_t crc, const void* s, const uint32_t len_p);
+static inline uint32_t crc32c(uint32_t crc, const void* s, const uint32_t len_p);
 
 #define FINALIZE_CRC32C(CRC) \
     CRC ^ 0xFFFFFFFF;
@@ -195,7 +195,7 @@ static inline uint32_t intrinsic_crc32c(uint32_t crc, const void* s, uint32_t le
 
 #endif
 
-EXTERN_C uint32_t crc32c(uint32_t crc, const void* s, const uint32_t len_p)
+static inline uint32_t crc32c(uint32_t crc, const void* s, const uint32_t len_p)
 {
     const uint32_t len = len_p;
     const uint8_t* p = (const uint8_t*) s;

@@ -5,7 +5,6 @@
 #include <stdlib.h>
 
 #include "cached_tree.h"
-#include "crc32.c"
 
 static int err;
 
@@ -15,17 +14,6 @@ typedef struct counted_string
     uint32_t size;
 } counted_string;
 
-
-static inline uint32_t EntryKey(const char* name, size_t name_length)
-{
-    assert(name_length <= 0xFFFF);
-
-    const uint32_t name_crc =
-    crc32c(~0, name, name_length);
-    const uint32_t entry_key = (name_crc & 0xFFFF)
-                             | (name_length << 16);
-    return entry_key;
-}
 
 #if 0
 counted_string StripLastComponent(counted_string *path)
@@ -69,20 +57,6 @@ meta_data_entry_t* LookupDirPathByKey(cache_t* cache, const char* dir_path,
     }
 
     return result;
-}
-
-static inline uint32_t fhandle3_length(const fhandle3* handle)
-{
-    uint32_t length = 0;
-
-    for(int i = 0; i < 8;i++)
-    {
-        if (((uint32_t*)handle->fhandle3)[i] == 0)
-            break;
-        length += 4;
-    }
-
-    return length;
 }
 
 fhandle3 ptrToHandle(cache_t* cache, filehandle_ptr_t fh_ptr)
@@ -173,7 +147,7 @@ meta_data_entry_t* LookupPath(cache_t* cache, const char* full_path,
 {
     meta_data_entry_t* result = 0;
 
-    size_t dash_posiiton = 0;
+    size_t slash_posiiton = 0;
     
     for(const char* p = full_path + (path_length - 1);
         p > full_path;
@@ -182,20 +156,24 @@ meta_data_entry_t* LookupPath(cache_t* cache, const char* full_path,
     {
         if (*p == '/')
         {
-            dash_posiiton =  p - full_path;
+            slash_posiiton =  p - full_path;
             break;
         }
     }
     
-    size_t last_component_length = dash_posiiton - path_length;
-    const char* last_component_ptr = full_path + dash_posiiton;
+    size_t last_component_length = path_length - (slash_posiiton + 1);
+    const char* last_component_ptr = full_path + (slash_posiiton + 1);
 
     size_t dir_path_size = path_length - (last_component_length + 1);
     const uint32_t dir_entry_key = EntryKey(full_path, dir_path_size);
     
-    meta_data_entry_t* parentDir =
-        LookupDirPathByKey(cache, full_path, dir_entry_key);
-
+    meta_data_entry_t* parentDir = cache->root;
+    if (dir_path_size)
+    {
+        parentDir =
+            LookupDirPathByKey(cache, full_path, dir_entry_key);
+    }
+    
     if (!parentDir)
     {
 Lnotfound:
@@ -372,6 +350,8 @@ toc_entry_t* GetOrCreateTocEntryForDir(cache_t* cache, cached_dir_t* parentDir,
     toc_entry->entry_key = full_path_key;
     toc_entry->relative_name_pointer = fullPathPtr;
     toc_entry->entry = entry;
+    
+    return toc_entry;
 }
 
 meta_data_entry_t* LookupInDirectory(cache_t* cache, cached_dir_t* lookupDir,
@@ -439,10 +419,10 @@ meta_data_entry_t* GetOrCreateSubdirectory(cache_t* cache, cached_dir_t* parentD
 }
 
 meta_data_entry_t* CreateEntryFromFullPath(cache_t* cache,
-                                          const char* full_path, size_t path_length)
+                                           const char* full_path, size_t path_length)
 {
     meta_data_entry_t* result = 0;
-    assert(full_path[0] != '/');
+    assert(full_path[0] == '/');
     
     if (LookupPath(cache, full_path, path_length))
     {
@@ -467,6 +447,9 @@ meta_data_entry_t* CreateEntryFromFullPath(cache_t* cache,
         begin_segment += segment_length + 1;
         path_remaining -= (segment_length + 1);
     }
+    if (!segment_key)
+        segment_key = EntryKey(begin_segment, path_remaining);
+
     result = LookupInDirectoryByKey(cache, currentDir, begin_segment, segment_key);
     if (result)
     {
@@ -475,7 +458,7 @@ Lexists:
         result = 0;
         goto Lret;
     }
-    CreateEntryInDirectoryByKey(cache, currentDir, begin_segment, segment_key);
+    result = CreateEntryInDirectoryByKey(cache, currentDir, begin_segment, segment_key);
 Lret:
     return result;
 }
@@ -488,7 +471,6 @@ meta_data_entry_t* CreateEntryInDirectoryByKey(cache_t* cache, cached_dir_t* par
     result = LookupInDirectoryByKey(cache, parentDir, name, entry_key);
     if (result)
     {
-Lexists:
         err = -EEXIST;
         result = 0;
         goto Lret;
@@ -507,7 +489,7 @@ Lret:
 
 /// Adds or updates a file
 meta_data_entry_t* AddFile(cache_t* cache, const char* full_path,
-                            const void* content, uint32_t content_size)
+                           const void* content, uint32_t content_size)
 {
     uint16_t path_length = (uint16_t)strlen(full_path);
 
@@ -530,19 +512,22 @@ meta_data_entry_t* AddFile(cache_t* cache, const char* full_path,
     assert(result->type == ENTRY_TYPE_FILE);
     cached_file_t *file =  result->cached_file;
 
-    uint32_t content_crc = crc32c(~0, content, content_size);
-    if (content_size == file->size && content_crc == file->crc32)
+    if (content)
     {
-        // puts("size and crc match .. not updating content\n");
-    }
-    else
-    {
-        if (content_size != file->size)
-            file->data = realloc(file->data, content_size);
+        uint32_t content_crc = crc32c(~0, content, content_size);
+        if (content_size == file->size && content_crc == file->crc32)
+        {
+            // puts("size and crc match .. not updating content\n");
+        }
+        else
+        {
+            if (content_size != file->size)
+                file->data = realloc(file->data, content_size);
 
-        memcpy(file->data, content, content_size);
-        file->crc32 = content_crc;
-        file->size = content_size;
+            memcpy(file->data, content, content_size);
+            file->crc32 = content_crc;
+            file->size = content_size;
+        }
     }
 
     return result;

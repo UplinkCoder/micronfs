@@ -1,5 +1,11 @@
-#include <stdint.h>
-#include "../micronfs.h"
+#ifndef _CACHED_TREE_H_
+#define _CACHED_TREE_H_
+
+#  include <stdint.h>
+#  include "../micronfs.h"
+#  include "crc32.c"
+#  include <assert.h>
+
 struct cached_file_t;
 struct cached_dir_t;
 
@@ -153,11 +159,39 @@ const char* toCharPtr(cache_t* cache, name_cache_ptr_t ptr);
 
 void ResetCache(cache_t* cache);
 
+filehandle_ptr_t handleToPtr(cache_t* cache, const fhandle3* handle);
+
 
 /// Adds or updates a file
 meta_data_entry_t* AddFile(cache_t* cache, const char* full_path,
                             const void* content, uint32_t content_size);
 
-#ifndef ALIGN4
-#  define ALIGN4(VAR) (((VAR) + 3) & ~3)
+static inline uint32_t EntryKey(const char* name, size_t name_length)
+{
+    assert(name_length <= 0xFFFF);
+
+    const uint32_t name_crc =
+    crc32c(~0, name, name_length);
+    const uint32_t entry_key = (name_crc & 0xFFFF)
+                             | (name_length << 16);
+    return entry_key;
+}
+
+static inline uint32_t fhandle3_length(const fhandle3* handle)
+{
+    uint32_t length = 0;
+
+    for(int i = 0; i < 8;i++)
+    {
+        if (((uint32_t*)handle->fhandle3)[i] == 0)
+            break;
+        length += 4;
+    }
+
+    return length;
+}
+
+#  ifndef ALIGN4
+#    define ALIGN4(VAR) (((VAR) + 3) & ~3)
+#  endif
 #endif
