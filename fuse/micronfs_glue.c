@@ -99,7 +99,6 @@ void PushUnixAuthN(RPCSerializer* self)
 #define MESSAGE_TYPE_CALL 0
 #define PROTO_TCP 6
 
-
 void InitCache(cache_t* cache)
 {
     uint32_t initial_name_storage_capacity = 65536;
@@ -169,7 +168,7 @@ void InitCache(cache_t* cache)
 
     cache->root->cached_dir = cache->dir_entries + cache->dir_entries_size++;
     cache->root->cached_dir->fullPath = GetOrAddName(cache, "/");
-    
+
     cache->root->cached_dir->entries = cache->root + cache->metadata_size;
     cache->root->cached_dir->entries_size = 0;
     cache->root->cached_dir->entries_capacity = 256;
@@ -295,7 +294,6 @@ fhandle3 mountd_mnt(int mountd_fd, const char* dirPath)
     //TODO we should ready the required auth here .... maybe
 
     return result;
-
 }
 
 mountlist_t* mountd_dump(int mountd_fd)
@@ -533,7 +531,7 @@ int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
             const fattr3 attribs = RPCDeserializer_ReadFileAttribs(&d);
             attribsPtr = &attribs;
         }
-        
+
         const fhandle3* handlePtr = 0;
         RPCDeserializer_EnsureSize(&d, 4);
         if (RPCDeserializer_ReadBool(&d))
@@ -541,7 +539,7 @@ int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
             const fhandle3 handle = RPCDeserializer_ReadFileHandle(&d);
             handlePtr = &handle;
         }
-        printf("name: %s\n", name);
+        // printf("name: %s\n", name);
 
         if (!fileIter(name, handlePtr, attribsPtr, userData))
         {
@@ -583,7 +581,6 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir
             PREP_RPC_CALL(NFS_PROGRAM, 3, NFS_READDIR_PROCEDURE));
 
     PushUnixAuthN(&s);
-
 
     int length = fhandle3_length(dir);
     RPCSerializer_PushString(&s, length, (const char*)dir->fhandle3);
@@ -702,7 +699,6 @@ int populateCache_cb(const char* fName, const fhandle3* handle,
             entry = GetOrCreateSubdirectory(cache, parentDir->cached_dir, fName, len);
             if (fName[0] != '.')
             {
-                printf("reading dir: %s\n", fName);
                 uint64_t cookie = 0;
                 uint64_t verifier = 0;
                 populate_cache_cb_args_t newArgs = {
@@ -831,7 +827,7 @@ extern int nfs_init_cache(cache_t* dirCache, int argc, char* argv[])
     InitCache(dirCache);
     dirCache->rootHandle = fh;
     populate_cache_cb_args_t args = {dirCache, dirCache->root};
-    
+
     for(;;) {
         cookie3 old_cookie = cookie;
         int shouldContinueReading =
@@ -846,6 +842,6 @@ extern int nfs_init_cache(cache_t* dirCache, int argc, char* argv[])
     cached_dir_t root = *dirCache->root->cached_dir;
     meta_data_entry_t* one_past_last_entry =
         root.entries + root.entries_size;
-    
+
     mountd_umnt(mountd_fd, "/nfs/git");
 }
