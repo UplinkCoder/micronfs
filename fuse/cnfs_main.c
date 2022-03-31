@@ -38,6 +38,8 @@
 #include "../micronfs.h"
 #include "../cache/cached_tree.h"
 
+DEFN_PRINT_NAME_CACHE
+
 typedef struct fileList_t {
     const char* name;
     struct fileList_t* parent;
@@ -444,7 +446,7 @@ static int cnfs_read(const char *path, char *buf, size_t size, off_t offset,
     }
     else
     {
-        AddLog("reading file: %s", path);
+        AddLog("reading file: %s size: %u offset %u", path, size, offset);
 
         meta_data_entry_t* entry =
             LookupPath(&dirCache, path, strlen(path));
@@ -454,7 +456,7 @@ static int cnfs_read(const char *path, char *buf, size_t size, off_t offset,
             if (entry->cached_file->data == 0)
             {
                 fhandle3 handle = ptrToHandle(&dirCache, entry->handle);
-                entry->cached_file->data = 
+                entry->cached_file->data =
                     realloc(entry->cached_file->data, entry->cached_file->size);
                 int read = nfs_read(nfs_sock_fd, &handle
                     , buf, size, offset);

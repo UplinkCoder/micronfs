@@ -160,6 +160,7 @@ const char* toCharPtr(cache_t* cache, name_cache_ptr_t ptr);
 void ResetCache(cache_t* cache);
 
 filehandle_ptr_t handleToPtr(cache_t* cache, const fhandle3* handle);
+fhandle3 ptrToHandle(cache_t* cache, filehandle_ptr_t fh_ptr);
 
 
 /// Adds or updates a file
@@ -194,4 +195,19 @@ static inline uint32_t fhandle3_length(const fhandle3* handle)
 #  ifndef ALIGN4
 #    define ALIGN4(VAR) (((VAR) + 3) & ~3)
 #  endif
+
+#define DEFN_PRINT_NAME_CACHE \
+void PrintNameCache(cache_t* cache) \
+{ \
+    char const * one_past_last = cache->name_stringtable \
+                               + cache->name_stringtable_size; \
+    int i = 0; \
+    for(const char* str = cache->name_stringtable; \
+        str < one_past_last; \
+        str += (ALIGN4(strlen(str) + 1))) \ 
+    { \
+        printf("%d: %s\n", ++i, str); \
+    } \
+}
+
 #endif
