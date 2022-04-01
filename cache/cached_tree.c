@@ -166,21 +166,16 @@ meta_data_entry_t* LookupPath(cache_t* cache, const char* full_path,
     size_t dir_path_size = path_length - (last_component_length + 1);
     const uint32_t dir_entry_key = EntryKey(full_path, dir_path_size);
 
-    printf("last_component_length: %d\tdir_path_size: %d\n", last_component_length, dir_path_size);
-
     meta_data_entry_t* parentDir = cache->root;
     if (dir_path_size)
     {
         parentDir =
             LookupDirPathByKey(cache, full_path, dir_entry_key);
-        if (!parentDir)
-            printf("could find parentDir: %.*s\n\tfor %s\n", (int)dir_path_size, full_path, last_component_ptr);
     }
 
     if (!parentDir)
     {
 Lnotfound:
-        printf("couldn't find path: %s\n", full_path);
         result = 0;
         err = -ENOENT;
         goto Lret;
@@ -191,7 +186,6 @@ Lnotfound:
     if (!result)
         goto Lnotfound;
     // found
-    printf("found path: %s\n", full_path);
 Lret:
     return result;
 }
@@ -439,7 +433,7 @@ meta_data_entry_t* CreateEntryFromFullPath(cache_t* cache,
 {
     meta_data_entry_t* result = 0;
     assert(full_path[0] == '/');
-    
+
     if (LookupPath(cache, full_path, path_length))
     {
         goto Lexists;
@@ -449,7 +443,7 @@ meta_data_entry_t* CreateEntryFromFullPath(cache_t* cache,
     uint32_t path_remaining = path_length - 1;
     const char* begin_segment = full_path + 1;
     uint32_t segment_key = 0;
-    
+
     for (;;)
     {
         const char *end_segment =
@@ -483,7 +477,7 @@ meta_data_entry_t* CreateEntryInDirectoryByKey(cache_t* cache, cached_dir_t* par
                                                const char* name, uint32_t entry_key)
 {
     meta_data_entry_t* result = 0;
-    
+
     result = LookupInDirectoryByKey(cache, parentDir, name, entry_key);
     if (result)
     {
@@ -491,14 +485,14 @@ meta_data_entry_t* CreateEntryInDirectoryByKey(cache_t* cache, cached_dir_t* par
         result = 0;
         goto Lret;
     }
-    
+
     if (parentDir->entries_capacity == 0)
     {
         // allocate 256 direntires for now
         allocate_dir_entires(cache, parentDir, 256);
     }
     // when we get here we can create our entry
-    
+
     assert(parentDir->entries_capacity > parentDir->entries_size);
     result = parentDir->entries + parentDir->entries_size++;
     result->entry_key = entry_key;
@@ -529,12 +523,12 @@ meta_data_entry_t* AddFile(cache_t* cache, const char* full_path,
         result->cached_file->crc32 = 0;
         result->cached_file->size = 0;
         result->cached_file->data = 0;
-        
+
         if (virtual_file)
             result->flags |= ENTRY_FLAG_VIRTUAL;
     }
     assert((!(result->flags & ENTRY_FLAG_VIRTUAL)) == !virtual_file);
-    
+
     assert(result->type == ENTRY_TYPE_FILE);
     cached_file_t *file =  result->cached_file;
 

@@ -85,7 +85,7 @@ typedef enum entry_type_t {
 typedef enum entry_flag_t {
     ENTRY_FLAG_NONE,
     ENTRY_FLAG_VIRTUAL = (1 << 0),
-    
+
     ENTRY_FLAG_MAX = (1 << 1),
 } entry_flag_t;
 
@@ -213,7 +213,7 @@ void PrintNameCache(cache_t* cache) \
     int i = 0; \
     for(const char* str = cache->name_stringtable; \
         str < one_past_last; \
-        str += (ALIGN4(strlen(str) + 1))) \ 
+        str += (ALIGN4(strlen(str) + 1))) \
     { \
         printf("%d: %s\n", ++i, str); \
     } \
