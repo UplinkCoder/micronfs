@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <assert.h>
 
 #ifdef __ARM_FEATURE_CRC32
 #  define ARM_NEON_CRC32C
@@ -20,7 +21,7 @@
 static inline uint32_t crc32c(uint32_t crc, const void* s, const uint32_t len_p);
 
 #define FINALIZE_CRC32C(CRC) \
-    CRC ^ 0xFFFFFFFF;
+    ((CRC) ^ 0xFFFFFFFF)
 #define INITIAL_CRC32C ((uint32_t)0xFFFFFFFF)
 
 #pragma once

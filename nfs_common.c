@@ -107,7 +107,7 @@ void InitCache(cache_t* cache)
     uint32_t initial_name_nodes_capacity = 4096;
     uint32_t initial_files_capacity = 16384;
 
-    uint32_t initial_metadata_nodes = 16384 * 4;
+    uint32_t initial_metadata_nodes = 16384 * 8;
     uint32_t initial_dir_nodes = 2048;
     uint32_t initial_toc_capacity = 2048;
     uint32_t initial_limb_capacity = 16384;
@@ -168,10 +168,10 @@ void InitCache(cache_t* cache)
         .limbs_capacity = initial_limb_capacity
     };
 
+    ResetCache(cache);
+
     cache->root->cached_dir = cache->dir_entries + cache->dir_entries_size++;
     cache->root->cached_dir->fullPath = GetOrAddName(cache, "/");
-
-    ResetCache(cache);
 }
 
 void portmap_nullCall(int sock_fd)
@@ -426,9 +426,11 @@ int64_t nfs_read(SOCKET nfs_fd, const fhandle3* file
     uint32_t readAlready = 0;
     while(bufferLeft < arraySize - readAlready)
     {
-        RPCDeserializer_EnsureSize(&d, bufferLeft);
+        // RPCDeserializer_EnsureSize(&d, bufferLeft);
         memcpy(data + readAlready, d.ReadPtr, bufferLeft);
         readAlready += bufferLeft;
+        d.ReadPtr += (ALIGN4(bufferLeft) / 4);
+        RPCDeserializer_EnsureSize(&d, 4);
         bufferLeft = RPCDeserializer_BufferLeft(&d);
     }
 

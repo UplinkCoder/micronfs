@@ -41,6 +41,7 @@ typedef struct meta_data_entry_t
     name_cache_ptr_t name;
 
     uint8_t type; /// nfs type3
+    uint8_t flags;
 
     union
     {
@@ -80,6 +81,14 @@ typedef enum entry_type_t {
     ENTRY_TYPE_DIRECTORY,
     ENTRY_TYPE_MAX,
 } entry_type_t;
+
+typedef enum entry_flag_t {
+    ENTRY_FLAG_NONE,
+    ENTRY_FLAG_VIRTUAL = (1 << 0),
+    
+    ENTRY_FLAG_MAX = (1 << 1),
+} entry_flag_t;
+
 
 typedef struct toc_entry_t
 {
@@ -165,7 +174,7 @@ fhandle3 ptrToHandle(cache_t* cache, filehandle_ptr_t fh_ptr);
 
 /// Adds or updates a file
 meta_data_entry_t* AddFile(cache_t* cache, const char* full_path,
-                            const void* content, uint32_t content_size);
+                            const void* content, uint32_t content_size, int virtual_file);
 
 static inline uint32_t EntryKey(const char* name, size_t name_length)
 {

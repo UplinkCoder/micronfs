@@ -27,7 +27,6 @@ counted_string StripLastComponent(counted_string *path)
             uint32_t idx = (part->size - i);
             counted_string lastPart = path->ptr +
             path->size -= (path->size - i);
-             
         }
     }
 }
@@ -148,7 +147,7 @@ meta_data_entry_t* LookupPath(cache_t* cache, const char* full_path,
     meta_data_entry_t* result = 0;
 
     size_t slash_posiiton = 0;
-    
+
     for(const char* p = full_path + (path_length - 1);
         p > full_path;
         p--
@@ -160,23 +159,28 @@ meta_data_entry_t* LookupPath(cache_t* cache, const char* full_path,
             break;
         }
     }
-    
+
     size_t last_component_length = path_length - (slash_posiiton + 1);
     const char* last_component_ptr = full_path + (slash_posiiton + 1);
 
     size_t dir_path_size = path_length - (last_component_length + 1);
     const uint32_t dir_entry_key = EntryKey(full_path, dir_path_size);
-    
+
+    printf("last_component_length: %d\tdir_path_size: %d\n", last_component_length, dir_path_size);
+
     meta_data_entry_t* parentDir = cache->root;
     if (dir_path_size)
     {
         parentDir =
             LookupDirPathByKey(cache, full_path, dir_entry_key);
+        if (!parentDir)
+            printf("could find parentDir: %.*s\n\tfor %s\n", (int)dir_path_size, full_path, last_component_ptr);
     }
-    
+
     if (!parentDir)
     {
 Lnotfound:
+        printf("couldn't find path: %s\n", full_path);
         result = 0;
         err = -ENOENT;
         goto Lret;
@@ -186,6 +190,8 @@ Lnotfound:
     result = LookupInDirectory(cache, parentDir->cached_dir, last_component_ptr, last_component_length);
     if (!result)
         goto Lnotfound;
+    // found
+    printf("found path: %s\n", full_path);
 Lret:
     return result;
 }
@@ -328,29 +334,34 @@ toc_entry_t* GetOrCreateTocEntryForDir(cache_t* cache, cached_dir_t* parentDir,
     // make sure it's a directory and that it has not been registered in the toc already
 
     char fullPathBuffer[4096];
-    const char* parentPath = toCharPtr(cache, parentDir->fullPath);
-    assert(parentPath);
-    size_t parentPathLength = strlen(parentPath);
-    memcpy(fullPathBuffer, parentPath, parentPathLength);
+    size_t parentPathLength = 0;
+    if (parentDir != cache->root->cached_dir)
+    {
+        const char* parentPath = toCharPtr(cache, parentDir->fullPath);
+        assert(parentPath);
+        parentPathLength = strlen(parentPath);
+        memcpy(fullPathBuffer, parentPath, parentPathLength);
+    }
     fullPathBuffer[parentPathLength] = '/';
-    
+    fullPathBuffer[parentPathLength + 1] = '\0';
+
     const char* name = toCharPtr(cache, entry->name);
     size_t name_length = strlen(name);
     memcpy(fullPathBuffer + parentPathLength + 1, name, name_length);
-    
+
     const uint32_t full_path_key = EntryKey(fullPathBuffer, name_length + parentPathLength + 1);
-    
-    name_cache_ptr_t fullPathPtr = 
+
+    name_cache_ptr_t fullPathPtr =
         GetOrAddNameByKey(cache, fullPathBuffer, full_path_key);
     entry->cached_dir->fullPath = fullPathPtr;
-    
+
     assert(cache->toc_capacity > cache->toc_size);
     toc_entry_t* toc_entry = cache->toc_entries + cache->toc_size++;
-    
+
     toc_entry->entry_key = full_path_key;
     toc_entry->relative_name_pointer = fullPathPtr;
     toc_entry->entry = entry;
-    
+
     return toc_entry;
 }
 
@@ -362,6 +373,15 @@ meta_data_entry_t* LookupInDirectory(cache_t* cache, cached_dir_t* lookupDir,
     const uint32_t entry_key = (name_crc & 0xFFFF)
                              | (name_length << 16);
     return LookupInDirectoryByKey(cache, lookupDir, name, entry_key);
+}
+
+void allocate_dir_entires(cache_t* cache, cached_dir_t* dir, int n)
+{
+    assert(cache->metadata_size + n < cache->metadata_capacity);
+    meta_data_entry_t*  entires = cache->root + cache->metadata_size;
+    cache->metadata_size += n;
+    dir->entries = entires;
+    dir->entries_capacity = n;
 }
 
 meta_data_entry_t* GetOrCreateSubdirectoryByKey(cache_t* cache, cached_dir_t* parentDir,
@@ -384,11 +404,7 @@ meta_data_entry_t* GetOrCreateSubdirectoryByKey(cache_t* cache, cached_dir_t* pa
     if (parentDir->entries_capacity == 0)
     {
         // allocate 256 direntires for now
-        assert(cache->metadata_size + 256 < cache->metadata_capacity);
-        meta_data_entry_t*  entires = cache->root + cache->metadata_size;
-        cache->metadata_size += 256;
-        parentDir->entries = entires;
-        parentDir->entries_capacity = 256;
+        allocate_dir_entires(cache, parentDir, 256);
     }
 
     assert(parentDir->entries_size < parentDir->entries_capacity);
@@ -475,6 +491,12 @@ meta_data_entry_t* CreateEntryInDirectoryByKey(cache_t* cache, cached_dir_t* par
         result = 0;
         goto Lret;
     }
+    
+    if (parentDir->entries_capacity == 0)
+    {
+        // allocate 256 direntires for now
+        allocate_dir_entires(cache, parentDir, 256);
+    }
     // when we get here we can create our entry
     
     assert(parentDir->entries_capacity > parentDir->entries_size);
@@ -489,7 +511,7 @@ Lret:
 
 /// Adds or updates a file
 meta_data_entry_t* AddFile(cache_t* cache, const char* full_path,
-                           const void* content, uint32_t content_size)
+                           const void* content, uint32_t content_size, int virtual_file)
 {
     uint16_t path_length = (uint16_t)strlen(full_path);
 
@@ -507,8 +529,12 @@ meta_data_entry_t* AddFile(cache_t* cache, const char* full_path,
         result->cached_file->crc32 = 0;
         result->cached_file->size = 0;
         result->cached_file->data = 0;
+        
+        if (virtual_file)
+            result->flags |= ENTRY_FLAG_VIRTUAL;
     }
-
+    assert((!(result->flags & ENTRY_FLAG_VIRTUAL)) == !virtual_file);
+    
     assert(result->type == ENTRY_TYPE_FILE);
     cached_file_t *file =  result->cached_file;
 
@@ -532,6 +558,7 @@ meta_data_entry_t* AddFile(cache_t* cache, const char* full_path,
 
     return result;
 }
+
 
 #if TEST_CACHE
 

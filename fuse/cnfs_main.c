@@ -313,7 +313,7 @@ int AddDir(fileList_t* parent, const char* newDirName)
 static int cnfs_mkdir (const char *full_path, mode_t mode)
 {
     AddLog("mkdir: '%s'", full_path);
-    
+    mode |= S_IFDIR;
     
     char* end = rawmemchr(full_path, '\0');
     size_t path_length = end - full_path;
@@ -394,7 +394,7 @@ static int cnfs_write(const char *path, const char *buf, size_t size, off_t offs
     e = LookupPath(&dirCache, path, strlen(path));
     if (e)
     {
-        AddFile(&dirCache, path, buf, size);
+        AddFile(&dirCache, path, buf, size, 1);
         return size;
     }
     else
@@ -410,10 +410,9 @@ static int cnfs_mknod(const char * path, mode_t mode, dev_t dev)
         return -EEXIST;
     }
     
-    AddFile(&dirCache, path, 0, 0);
+    AddFile(&dirCache, path, 0, 0, 1);
     return 0;
 }
-fhandle3 ptrToHandle(cache_t* cache, filehandle_ptr_t fh_ptr);
 int nfs_read(int sock, const fhandle3*, void* data, uint32_t size, uint64_t offset);
 
 static int cnfs_read(const char *path, char *buf, size_t size, off_t offset,
@@ -453,24 +452,26 @@ static int cnfs_read(const char *path, char *buf, size_t size, off_t offset,
 
         if (entry->type == ENTRY_TYPE_FILE)
         {
-            if (entry->cached_file->data == 0)
+            fhandle3 handle = ptrToHandle(&dirCache, entry->handle);
+            if (offset == 0)
             {
-                fhandle3 handle = ptrToHandle(&dirCache, entry->handle);
                 entry->cached_file->data =
                     realloc(entry->cached_file->data, entry->cached_file->size);
-                int read = nfs_read(nfs_sock_fd, &handle
-                    , buf, size, offset);
-                memcpy(entry->cached_file->data, buf, read);
-                return read;
             }
-            len = entry->cached_file->size;
-
-            if (offset < len) {
-                if (offset + size > logSize)
-                    size = logSize - offset;
+            int read = entry->cached_file->size;
+            if (!(entry->flags & ENTRY_FLAG_VIRTUAL))
+            {
+                read = nfs_read(nfs_sock_fd, &handle
+                    , buf, size, offset);
+                memcpy(entry->cached_file->data + offset, buf, read);
+            }
+            else
+            {
+                if (size > (entry->cached_file->size - offset))
+                    size = (entry->cached_file->size - offset);
                 memcpy(buf, entry->cached_file->data + offset, size);
-            } else
-                size = 0;
+            }
+            return read;
         }
         else
             return -ENOENT;
@@ -480,10 +481,25 @@ static int cnfs_read(const char *path, char *buf, size_t size, off_t offset,
 	return size;
 }
 
+/** Change the permission bits of a file */
+int cnfs_chmod (const char * full_path, mode_t mode)
+{
+    return 0;
+}
+
+/** Change the owner and group of a file */
+int cnfs_chown (const char * full_path, uid_t uid, gid_t gid)
+{
+    return 0;
+}
+
+
 static const struct fuse_operations cnfs_oper = {
 	.init       = cnfs_init,
 	.getattr    = cnfs_getattr,
 	.readdir    = cnfs_readdir,
+    .chown      = cnfs_chown,
+    .chmod      = cnfs_chmod,
 	// .open       = cnfs_open,
 	.read       = cnfs_read,
     .write      = cnfs_write,
