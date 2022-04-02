@@ -15,7 +15,11 @@
 #endif
 
 #ifndef _cpluslplus
+# ifndef _WIN32
 #  include <stdbool.h>
+# else
+#  define bool int
+# endif
 #endif
 
 #include <stdio.h>

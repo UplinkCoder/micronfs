@@ -1,7 +1,11 @@
-#include <stdint.h>
-
 #ifndef _MICRONFS_H_
 #define _MICRONFS_H_
+
+#ifdef _WIN32
+#  include "stdint_msvc.h"
+#else
+#  include <stdint.h>
+#endif
 
 typedef enum nfsstat3 {
     NFS3ERR_OK          = 0,

@@ -1,5 +1,4 @@
 #include <assert.h>
-#include <stdint.h>
 #include <string.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -428,50 +427,106 @@ meta_data_entry_t* GetOrCreateSubdirectory(cache_t* cache, cached_dir_t* parentD
     return GetOrCreateSubdirectoryByKey(cache, parentDir, directory_name, key);
 }
 
-meta_data_entry_t* CreateEntryFromFullPath(cache_t* cache,
-                                           const char* full_path, size_t path_length)
+lookup_parent_result_t LookupParent(cache_t* cache, const char* full_path, uint32_t path_length)
+{
+    lookup_parent_result_t result;
+    
+    size_t slash_posiiton = 0;
+    const char* end = full_path + path_length;
+    for(const char* p = end;
+        p > full_path;
+        p--
+    )
+    {
+        if (*p == '/')
+        {
+            slash_posiiton =  p - full_path;
+            break;
+        }
+    }
+
+    size_t last_component_length = path_length - (slash_posiiton + 1);
+    const char* last_component_ptr = full_path + (slash_posiiton + 1);
+
+    size_t dir_path_size = path_length - (last_component_length + !!slash_posiiton);
+    const uint32_t dir_entry_key = EntryKey(full_path, dir_path_size);
+
+    meta_data_entry_t* parent_dir_entry
+        = LookupPath(cache, full_path, dir_path_size);
+    result.parentDir = (parent_dir_entry ? parent_dir_entry->cached_dir : 0);
+    result.entry_name = last_component_ptr;
+    result.entry_name_length = last_component_length;
+    
+    return result;
+}
+
+meta_data_entry_t* GetOrCreateEntryFromFullPath(cache_t* cache,
+                                           const char* full_path, size_t path_length,
+                                           int must_not_exist)
 {
     meta_data_entry_t* result = 0;
     assert(full_path[0] == '/');
 
-    if (LookupPath(cache, full_path, path_length))
-    {
-        goto Lexists;
-    }
+    lookup_parent_result_t p = 
+        LookupParent(cache, full_path, path_length);
 
+ 
     cached_dir_t* currentDir = cache->root->cached_dir;
     uint32_t path_remaining = path_length - 1;
     const char* begin_segment = full_path + 1;
     uint32_t segment_key = 0;
 
-    for (;;)
+    if (p.parentDir)
     {
-        const char *end_segment =
-            memchr(begin_segment, '/', path_remaining);
-        if (end_segment == 0)
-            break;
-
-        size_t segment_length = end_segment - begin_segment;
-        segment_key = EntryKey(begin_segment, segment_length);
-        currentDir = GetOrCreateSubdirectoryByKey(cache, currentDir, begin_segment, segment_key)->cached_dir;
-        begin_segment += segment_length + 1;
-        path_remaining -= (segment_length + 1);
-    }
-    if (!segment_key)
+        currentDir = p.parentDir;
+        begin_segment = p.entry_name;
+        path_remaining = p.entry_name_length;
         segment_key = EntryKey(begin_segment, path_remaining);
-
-    result = LookupInDirectoryByKey(cache, currentDir, begin_segment, segment_key);
-    if (result)
-    {
-Lexists:
-        err = -EEXIST;
-        result = 0;
-        goto Lret;
     }
-    result = CreateEntryInDirectoryByKey(cache, currentDir, begin_segment, segment_key);
-Lret:
+    else
+    {
+        for (;;)
+        {
+            const char *end_segment =
+                memchr(begin_segment, '/', path_remaining);
+            if (end_segment == 0)
+                break;
+
+            size_t segment_length = end_segment - begin_segment;
+            segment_key = EntryKey(begin_segment, segment_length);
+            currentDir = 
+                GetOrCreateSubdirectoryByKey(cache, currentDir,
+                                             begin_segment, segment_key)->cached_dir;
+            begin_segment += segment_length + 1;
+            path_remaining -= (segment_length + 1);
+        }
+        if (!segment_key)
+            segment_key = EntryKey(begin_segment, path_remaining);
+    }
+    
+    result = LookupInDirectoryByKey(cache, currentDir, begin_segment, segment_key);
+    if (!result)
+    {
+        result = CreateEntryInDirectoryByKey(cache, currentDir, begin_segment, segment_key);
+    }
+    else if (must_not_exist)
+    {
+        err = -EEXIST;
+    }
+
     return result;
 }
+
+
+meta_data_entry_t* CreateEntryFromFullPath(cache_t* cache,
+                                           const char* full_path, size_t path_length)
+{
+    meta_data_entry_t * result = 
+        GetOrCreateEntryFromFullPath(cache, full_path, path_length, 1);
+    
+    return result;
+}
+
 
 meta_data_entry_t* CreateEntryInDirectoryByKey(cache_t* cache, cached_dir_t* parentDir,
                                                const char* name, uint32_t entry_key)

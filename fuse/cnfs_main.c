@@ -402,7 +402,10 @@ static int cnfs_read(const char *path, char *buf, size_t size, off_t offset,
 
 	return size;
 }
-
+int cnfs_delete(const char * full_path)
+{
+    
+}
 /** Change the permission bits of a file */
 int cnfs_chmod (const char * full_path, mode_t mode)
 {

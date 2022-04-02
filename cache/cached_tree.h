@@ -1,7 +1,12 @@
 #ifndef _CACHED_TREE_H_
 #define _CACHED_TREE_H_
 
+#ifdef _WIN32
+#  include "../stdint_msvc.h"
+#else
 #  include <stdint.h>
+#endif
+
 #  include "../micronfs.h"
 #  include "crc32.c"
 #  include <assert.h>
@@ -105,6 +110,13 @@ typedef struct toc_entry_t
     meta_data_entry_t* entry;
 } toc_entry_t;
 
+typedef struct freelist_entry_t
+{
+    entry_type_t entry_type;
+    void* entry;
+    struct freelist_entry_t* next;
+} freelist_entry_t;
+
 typedef struct cache_t
 {
     toc_entry_t* toc_entries;
@@ -139,7 +151,19 @@ typedef struct cache_t
     uint32_t limbs_capacity;
 
     fhandle3 rootHandle;
+    
+    freelist_entry_t* freelist;
 } cache_t;
+
+typedef struct lookup_parent_result_t
+{
+    cached_dir_t* parentDir;
+    const char* entry_name;
+    uint32_t entry_name_length;
+} lookup_parent_result_t;
+
+lookup_parent_result_t LookupParent(cache_t* cache, const char* full_path, uint32_t path_length);
+
 
 meta_data_entry_t* LookupInDirectory(cache_t* cache, cached_dir_t* lookupDir,
                                      const char* name, size_t name_length);
