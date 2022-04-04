@@ -199,14 +199,18 @@ fhandle3 ptrToHandle(cache_t* cache, filehandle_ptr_t fh_ptr);
 /// Adds or updates a file
 meta_data_entry_t* AddFile(cache_t* cache, const char* full_path,
                             const void* content, uint32_t content_size, int virtual_file);
+#ifdef _MSC_VER
+#  if _MSC_VER <= 1800
+#    define inline
+#  endif
+#endif
 
 static inline uint32_t EntryKey(const char* name, size_t name_length)
 {
-    assert(name_length <= 0xFFFF);
+//    assert(name_length <= 0xFFFF);
 
-    const uint32_t name_crc =
-    crc32c(~0, name, name_length);
-    const uint32_t entry_key = (name_crc & 0xFFFF)
+    uint32_t name_crc = crc32c(~0, name, name_length);
+    uint32_t entry_key = (name_crc & 0xFFFF)
                              | (name_length << 16);
     return entry_key;
 }
@@ -214,11 +218,12 @@ static inline uint32_t EntryKey(const char* name, size_t name_length)
 static inline uint32_t fhandle3_length(const fhandle3* handle)
 {
     uint32_t length = 0;
-
-    for(int i = 0; i < 8;i++)
+	int i;
+    for(i = 0; i < 8;i++)
     {
-        if (((uint32_t*)handle->fhandle3)[i] == 0)
+        if (((uint32_t*)handle->handle)[i] == 0)
             break;
+
         length += 4;
     }
 

@@ -40,7 +40,7 @@
 #pragma once
 #endif
 
-#if _MSC_VER < 1500
+#if _MSC_VER <= 1500
 #include <limits.h>
 
 // For Visual Studio 6 in C++ mode and for many Visual Studio versions when

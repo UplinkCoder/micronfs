@@ -1,4 +1,4 @@
-#include "nfs_common.c"
+#include "nfs_common.inl"
 
 int main(int argc, char* argv[])
 {
@@ -152,7 +152,7 @@ int main(int argc, char* argv[])
     int sz = recv(nfs_fd, recvbuffer, MAX_BUFFER_SIZE, 0);
 
     printf ("We've got %d bytes yay\n", sz);
-    close(nfs_fd);
+    closesocket(nfs_fd);
 
 
     for(int i = 0; i < sz; i++)

@@ -232,41 +232,19 @@ static const char* EatAndCountDotDotPath(const char* path, int* levels_upP)
     return path;
 }
 
+
 static int cnfs_mkdir (const char *full_path, mode_t mode)
 {
     AddLog("mkdir: '%s'", full_path);
     mode |= S_IFDIR;
 
-    char* end = rawmemchr(full_path, '\0');
-    size_t path_length = end - full_path;
-    size_t slash_posiiton = 0;
+    lookup_parent_result_t p = LookupParent(&dirCache, full_path, strlen(full_path));
 
-    for(const char* p = end;
-        p > full_path;
-        p--
-    )
-    {
-        if (*p == '/')
-        {
-            slash_posiiton =  p - full_path;
-            break;
-        }
-    }
-
-    size_t last_component_length = path_length - (slash_posiiton + 1);
-    const char* last_component_ptr = full_path + (slash_posiiton + 1);
-
-    size_t dir_path_size = path_length - (last_component_length + 1);
-    const uint32_t dir_entry_key = EntryKey(full_path, dir_path_size);
-
-    cached_dir_t* parent_dir
-        = LookupPath(&dirCache, full_path, dir_path_size)->cached_dir;
-
-    if (!parent_dir)
+    if (!p.parentDir)
         return -ENOENT;
 
     if (!GetOrCreateSubdirectory(&dirCache,
-        parent_dir, last_component_ptr, last_component_length))
+        p.parentDir, p.entry_name, p.entry_name_length))
     {
         return -EEXIST;
     }
@@ -402,45 +380,104 @@ static int cnfs_read(const char *path, char *buf, size_t size, off_t offset,
 
 	return size;
 }
-int cnfs_delete(const char * full_path)
-{
-    
-}
+
 /** Change the permission bits of a file */
-int cnfs_chmod (const char * full_path, mode_t mode)
+static int cnfs_chmod (const char * full_path, mode_t mode)
 {
     return 0;
 }
 
 /** Change the owner and group of a file */
-int cnfs_chown (const char * full_path, uid_t uid, gid_t gid)
+static int cnfs_chown (const char * full_path, uid_t uid, gid_t gid)
 {
     return 0;
 }
-
-int cnfs_truncate (const char * name, off_t newSize)
+/** Set size of a file */
+static int cnfs_truncate (const char * full_path, off_t newSize)
 {
-    meta_data_entry_t* file = 0;
-    if (!(file = LookupPath(&dirCache, name, strlen(name)))) 
+    meta_data_entry_t* file =
+        LookupPath(&dirCache, full_path, strlen(full_path));
+    if (!file)
     {
         return -ENOENT;
     }
     if (file->type != ENTRY_TYPE_FILE)
     {
-        return -ENOENT;
+        return -EISDIR;
     }
-    
+
     file->cached_file->size = newSize;
     return 0;
+}
+
+void FreeEntry(cache_t* cache, cached_dir_t* parentDir, meta_data_entry_t* entry)
+{
+    assert(entry >= parentDir->entries && entry < parentDir->entries + parentDir->entries_size);
+    size_t entry_idx = entry - parentDir->entries;
+    size_t how_many = parentDir->entries_size - entry_idx;
+    if (how_many)
+    {
+        memmove(entry, entry + 1, how_many - 1);
+    }
+    parentDir->entries_size--;
+}
+/** Remove a file */
+int cnfs_unlink (const char * full_path)
+{
+    lookup_parent_result_t result =
+        LookupParent(&dirCache, full_path, strlen(full_path));
+
+    if (!result.parentDir)
+    {
+        return -ENOENT;
+    }
+
+    meta_data_entry_t * file =
+        LookupInDirectory(&dirCache, result.parentDir,
+            result.entry_name, result.entry_name_length);
+    if (!file)
+    {
+        return -ENOENT;
+    }
+    assert(file->type == ENTRY_TYPE_FILE);
+
+    FreeEntry(&dirCache, result.parentDir, file);
+}
+
+/** Remove a directory */
+int cnfs_rmdir (const char * full_path)
+{
+    lookup_parent_result_t result =
+        LookupParent(&dirCache, full_path, strlen(full_path));
+
+    if (!result.parentDir)
+    {
+        return -ENOENT;
+    }
+
+    meta_data_entry_t * dir =
+        LookupInDirectory(&dirCache, result.parentDir,
+            result.entry_name, result.entry_name_length);
+
+    if (!dir)
+    {
+        return -ENOENT;
+    }
+    assert(dir->type == ENTRY_TYPE_DIRECTORY);
+    if(dir->cached_dir->entries_size != 0)
+    {
+        return -ENOTEMPTY;
+    }
+    FreeEntry(&dirCache, result.parentDir, dir);
 }
 
 static const struct fuse_operations cnfs_oper = {
 	.init       = cnfs_init,
 	.getattr    = cnfs_getattr,
 	.readdir    = cnfs_readdir,
-    .chown      = cnfs_chown,
-    .chmod      = cnfs_chmod,
     .truncate   = cnfs_truncate,
+    .unlink     = cnfs_unlink,
+    .rmdir      = cnfs_rmdir,
 	// .open       = cnfs_open,
 	.read       = cnfs_read,
     .write      = cnfs_write,

@@ -1,4 +1,4 @@
-#include "../nfs_common.c"
+#include "../nfs_common.inl"
 
 extern int nfs_init_cache(cache_t* dirCache, int argc, char* argv[])
 {

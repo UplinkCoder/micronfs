@@ -1,4 +1,9 @@
-#include <stdint.h>
+#ifdef _WIN32
+#  include "stdint_msvc.h"
+#else
+#  include <stdint.h>
+#endif
+
 #include <assert.h>
 
 #ifdef __ARM_FEATURE_CRC32
@@ -16,6 +21,11 @@
 #  define EXTERN_C extern
 #endif
 
+#ifdef _MSC_VER
+#  if _MSC_VER <= 1500
+#    define inline
+#  endif
+#endif
 // exports
 
 static inline uint32_t crc32c(uint32_t crc, const void* s, const uint32_t len_p);

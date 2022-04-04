@@ -1,9 +1,19 @@
-#include <stdint.h>
+#ifdef _WIN32
+#  include "stdint_msvc.h"
+#else
+#  include <stdint.h>
+#endif
+
 #include <assert.h>
 #include "endian.h"
 #include "micronfs.h"
 
-typedef int SOCKET;
+#ifndef _WIN32
+ typedef int SOCKET;
+#else
+# include <winsock2.h>
+#endif
+
 #pragma pack(push, 1)
 typedef uint32_t u32;
 
@@ -59,8 +69,8 @@ typedef struct RPCDeserializer
 static inline void ByteFlip_Array(u32* array, uint32_t length)
 {
     u32* end = array + length;
-
-    for(u32* p = array; p < end; p++)
+	u32* p;
+    for(p = array; p < end; p++)
     {
         *p = HTONL(*p);
     }
@@ -84,7 +94,13 @@ void RPCSerializer_PushU32Array(RPCSerializer *self,
                                 uint32_t n_elements, const uint32_t array[]);
 
 void RPCSerializer_Finalize(RPCSerializer* self);
-int RPCSerializer_Send(RPCSerializer* self, int sock_fd);
+int RPCSerializer_Send(RPCSerializer* self, SOCKET sock_fd);
+
+#ifdef _MSC_VER
+#  if _MSC_VER <= 1800
+#    define inline
+#  endif
+#endif
 
 static inline uint32_t RandomXid()
 {
@@ -101,25 +117,19 @@ static inline uint32_t RandomXid()
 }
 
 
-#define PREP_RPC_CALL_XID(PROG, PROG_VER, PROC, XID) \
-    (RPCCall) { \
-        .header = (RPCHeader) { \
-            .size_final = 0, \
-            .xid = XID, \
-            .reply = MESSAGE_TYPE_CALL \
-        }, \
-        .rpc_version = 2, \
-        .program_id = PROG, \
-        .program_ver = PROG_VER, \
-        .procedure = PROC, \
-    }
-
 #define PLACEHOLDER_XID 0x1234ABCD
 #define PREP_RPC_CALL(PROG, PROG_VER, PROC) \
     PREP_RPC_CALL_XID(PROG, PROG_VER, PROC, PLACEHOLDER_XID)
 
+#define RPCSerializer_InitCall(SELF, PROG, PROG_VER, PROC) \
+	RPCSerializer_InitCall_xid((SELF), PLACEHOLDER_XID, (PROG), (PROG_VER), (PROC))
+
 /// Retruns: Xid for the call in host order
-static inline uint32_t RPCSerializer_InitCall(RPCSerializer* self,  RPCCall q)
+static inline uint32_t RPCSerializer_InitCall_xid(RPCSerializer* self,
+                                                  uint32_t xid,
+                                                  uint32_t prog,
+                                                  uint32_t prog_ver,
+                                                  uint32_t proc)
 {
     if (!self->WritePtr)
     {
@@ -127,13 +137,21 @@ static inline uint32_t RPCSerializer_InitCall(RPCSerializer* self,  RPCCall q)
         self->MaxSize = sizeof(self->InlineStorage);
         self->WritePtr = self->BufferPtr + sizeof(RPCCall);
     }
+	RPCCall* q = ((RPCCall*)self->BufferPtr);
 
-    uint32_t xid = q.header.xid;
     if (xid == PLACEHOLDER_XID)
-        xid = q.header.xid = RandomXid();
+        xid = RandomXid();
 
     self->Size = sizeof(RPCCall) - sizeof(u32);
-    (*(RPCCall*)self->BufferPtr) =  q;
+    q->header.size_final = 0;
+    q->header.xid = xid;
+    q->header.reply = 0;
+
+    q->rpc_version = 2;
+    q->program_id = prog;
+    q->program_ver = prog_ver;
+    q->procedure = proc;
+
     ByteFlip_Array((uint32_t*)self->BufferPtr, sizeof(RPCCall) / sizeof(u32));
 
     return xid;

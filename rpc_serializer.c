@@ -9,7 +9,9 @@
 #endif
 
 #ifndef _cplusplus
+#ifndef _WIN32
 #  include <stdbool.h>
+#endif
 #endif
 
 void RPCSerializer_Init(RPCSerializer* self, uint8_t* Buffer, uint32_t sz)
@@ -46,7 +48,7 @@ void RPCSerializer_PushU64(RPCSerializer* self, uint64_t value)
     RPCSerializer_EnsureSize(self, 8);
     (*(uint32_t*)self->WritePtr) = HTONL(value >> 32);
     self->WritePtr += 4;
-    (*(uint32_t*)self->WritePtr) = HTONL(value & UINT32_MAX);
+    (*(uint32_t*)self->WritePtr) = HTONL(value & 0xFFFFFFFF);
     self->WritePtr += 4;
     self->Size += 8;
 }
@@ -114,7 +116,7 @@ void RPCSerializer_PushUnixAuth(RPCSerializer* self,
 
 int RPCSerializer_Send(RPCSerializer* self, SOCKET sock_fd)
 {
-    int sz_send = send(sock_fd, self->BufferPtr, self->Size + sizeof(u32), 0);
+    int sz_send = send(sock_fd, (const char*)self->BufferPtr, self->Size + sizeof(u32), 0);
     // printf("send: %d of %d bytes out\n", sz_send, self->Size);
     return sz_send;
 }
@@ -129,7 +131,7 @@ void RPCDeserializer_Init(RPCDeserializer* self, SOCKET sock_fd)
 
 RPCHeader RPCDeserializer_RecvHeader(RPCDeserializer* self)
 {
-    self->Size = recv(self->SockFd, self->BufferPtr, self->MaxBuffer, 0);
+    self->Size = recv(self->SockFd, (char*)self->BufferPtr, self->MaxBuffer, 0);
     // printf("initial recv: %d\n", self->Size);
     assert(self->Size >= sizeof(RPCHeader));
 
@@ -139,7 +141,9 @@ RPCHeader RPCDeserializer_RecvHeader(RPCDeserializer* self)
     self->FragmentSizeLeft = (size_final & ~(1 << 31));
     // don't count the size field
     self->FragmentSizeLeft -= (self->Size - 4);
-    return (RPCHeader){size_final, xid, reply};
+
+    RPCHeader result = {size_final, xid, reply};
+    return result;
 }
 
 static inline void RPCDeserializer_RefillBuffer(RPCDeserializer* self)
@@ -149,7 +153,7 @@ static inline void RPCDeserializer_RefillBuffer(RPCDeserializer* self)
     memmove(self->BufferPtr, self->ReadPtr, oldSize);
 
     int RecivedBytes =
-        recv(self->SockFd, self->BufferPtr + oldSize, self->MaxBuffer - oldSize, 0);
+        recv(self->SockFd, (char*)self->BufferPtr + oldSize, self->MaxBuffer - oldSize, 0);
     // printf("Refill recv: %d\n", RecivedBytes);
     int missing_bytes = self->MaxBuffer - (oldSize + RecivedBytes);
 
@@ -161,7 +165,7 @@ static inline void RPCDeserializer_RefillBuffer(RPCDeserializer* self)
 
     if (missing_bytes)
     {
-        RecivedBytes = recv(self->SockFd, self->BufferPtr + self->Size, missing_bytes, 0);
+        RecivedBytes = recv(self->SockFd, (char*)self->BufferPtr + self->Size, missing_bytes, 0);
         // printf("Refill recv (again): %d\n", RecivedBytes);
         self->Size += RecivedBytes;
         self->FragmentSizeLeft  -= RecivedBytes;
@@ -227,7 +231,7 @@ fhandle3 RPCDeserializer_ReadFileHandle(RPCDeserializer* self)
 
     for(int i = 0; i < length; i++)
     {
-        result.fhandle3[i] = *fhReadPtr++;
+        result.handle[i] = *fhReadPtr++;
 
     }
 

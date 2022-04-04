@@ -12,6 +12,8 @@
 #  include <netdb.h>
 #  include <unistd.h>
 #  include <sys/mman.h>
+#  include <stdint.h>
+#  define closesocket close
 #endif
 
 #ifndef _cpluslplus
@@ -38,7 +40,6 @@ struct sockaddr_in server;
 struct sockaddr_in m_client;
 struct sockaddr_in s_client;
 
-#include "srv.h"
 #include "micronfs.h"
 #include "rpc_serializer.h"
 
@@ -141,36 +142,34 @@ void InitCache(cache_t* cache)
         calloc(initial_files_capacity, sizeof(cached_file_t));
 
 
-    *cache = (cache_t) {
-        .toc_entries = toc_mem,
-        .root = meta_mem++,
+    cache->toc_entries = toc_mem;
+    cache->root = meta_mem++;
 
-        .toc_size = 0,
-        .toc_capacity = initial_toc_capacity,
+    cache->toc_size = 0;
+    cache->toc_capacity = initial_toc_capacity;
 
-        .metadata_size = 1,
-        .metadata_capacity = initial_metadata_nodes,
+    cache->metadata_size = 1;
+    cache->metadata_capacity = initial_metadata_nodes;
 
-        .name_stringtable  = (char*)(cache_memory + sizeof(cache_t)),
-        .name_stringtable_size = 0,
-        .name_stringtable_capacity = initial_name_storage_capacity,
+    cache->name_stringtable  = (char*)(cache_memory + sizeof(cache_t));
+    cache->name_stringtable_size = 0;
+    cache->name_stringtable_capacity = initial_name_storage_capacity;
 
-        .name_cache_root = tree_mem,
-        .name_cache_node_size = 1,
-        .name_cache_node_capacity = initial_name_nodes_capacity,
+    cache->name_cache_root = tree_mem;
+    cache->name_cache_node_size = 1;
+    cache->name_cache_node_capacity = initial_name_nodes_capacity;
 
-        .dir_entries = dirs_mem,
-        .dir_entries_size = 0,
-        .dir_entries_capacity = initial_dir_nodes,
+    cache->dir_entries = dirs_mem;
+    cache->dir_entries_size = 0;
+    cache->dir_entries_capacity = initial_dir_nodes;
 
-        .file_entries = files_mem,
-        .file_entries_size = 0,
-        .file_entries_capacity = initial_files_capacity,
+    cache->file_entries = files_mem;
+    cache->file_entries_size = 0;
+    cache->file_entries_capacity = initial_files_capacity;
 
-        .limbs = limbs_mem,
-        .limbs_size = 0,
-        .limbs_capacity = initial_limb_capacity
-    };
+    cache->limbs = limbs_mem;
+    cache->limbs_size = 0;
+    cache->limbs_capacity = initial_limb_capacity;
 
     ResetCache(cache);
 
@@ -182,8 +181,8 @@ void portmap_nullCall(int sock_fd)
 {
     RPCSerializer s = {0};
 
-    RPCSerializer_InitCall(&s, PREP_RPC_CALL
-        (PORTMAP_PROGRAM, 2, 0));
+    RPCSerializer_InitCall(&s,
+        PORTMAP_PROGRAM, 2, 0);
     RPCSerializer_PushNullAuth(&s);
     RPCSerializer_Finalize(&s);
     RPCSerializer_Send(&s, sock_fd);
@@ -195,7 +194,7 @@ uint16_t portmap_getport(int sock_fd,
         RPCSerializer s = {0};
 
     RPCSerializer_InitCall(&s,
-        PREP_RPC_CALL(PORTMAP_PROGRAM, 2, PORTMAP_DUMP_GETPORT));
+        PORTMAP_PROGRAM, 2, PORTMAP_DUMP_GETPORT);
 
     RPCSerializer_PushNullAuth(&s);
 
@@ -218,9 +217,9 @@ uint16_t portmap_getport(int sock_fd,
 
     RPCDeserializer_SkipAuth(&d);
 
-    nfsstat3 status = RPCDeserializer_ReadU32(&d);
+    nfsstat3 status = (nfsstat3)RPCDeserializer_ReadU32(&d);
     uint32_t port = RPCDeserializer_ReadU32(&d);
-    assert(port <= UINT16_MAX);
+    assert(port <= 0xFFFF);
 
     return port;
 }
@@ -235,7 +234,7 @@ typedef struct mountlist_t {
 void printFileHandle(const fhandle3* handle)
 {
     const uint32_t* ptr = (const uint32_t*)
-        &handle->fhandle3[0];
+        &handle->handle[0];
 
     printf("fh: %x %x %x %x %x %x %x %x\n",
         ptr[0], ptr[1], ptr[2], ptr[3],
@@ -249,7 +248,7 @@ void mountd_umnt(int mountd_fd, const char* dirPath)
 
     uint32_t mount_dump_xid =
         RPCSerializer_InitCall(&s,
-            PREP_RPC_CALL(MOUNT_PROGRAM, 3, MOUNT_UMNT_PROCEDURE));
+            MOUNT_PROGRAM, 3, MOUNT_UMNT_PROCEDURE);
 
     RPCSerializer_PushNullAuth(&s);
     uint32_t dirPathLength = strlen(dirPath);
@@ -267,7 +266,7 @@ fhandle3 mountd_mnt(int mountd_fd, const char* dirPath)
     fhandle3 result = {{0}};
 
     uint32_t mount_dump_xid = RPCSerializer_InitCall(&s,
-        PREP_RPC_CALL(MOUNT_PROGRAM, 3, MOUNT_MNT_PROCEDURE));
+        MOUNT_PROGRAM, 3, MOUNT_MNT_PROCEDURE);
 
     //RPCSerializer_PushNullAuth(&s);
     PushUnixAuthN(&s);
@@ -289,7 +288,7 @@ fhandle3 mountd_mnt(int mountd_fd, const char* dirPath)
 
     int rpc_accepted = RPCDeserializer_ReadBool(&d);
 
-    nfsstat3 status = RPCDeserializer_ReadU32(&d);
+    nfsstat3 status = (nfsstat3)RPCDeserializer_ReadU32(&d);
 
     result = RPCDeserializer_ReadFileHandle(&d);
     //TODO we should ready the required auth here .... maybe
@@ -305,7 +304,7 @@ mountlist_t* mountd_dump(int mountd_fd)
 
     uint32_t mount_dump_xid =
         RPCSerializer_InitCall(&s,
-            PREP_RPC_CALL(MOUNT_PROGRAM, 3, MOUNT_DUMP_PROCEDURE));
+            MOUNT_PROGRAM, 3, MOUNT_DUMP_PROCEDURE);
 
     RPCSerializer_PushNullAuth(&s);
     RPCSerializer_Finalize(&s);
@@ -319,7 +318,7 @@ mountlist_t* mountd_dump(int mountd_fd)
 
     RPCDeserializer_SkipAuth(&d);
 
-    nfsstat3 status = RPCDeserializer_ReadU32(&d);
+    nfsstat3 status = (nfsstat3)RPCDeserializer_ReadU32(&d);
     // now the actual params come ...
 
     static char mountlist_storage[8192];
@@ -381,13 +380,13 @@ int64_t nfs_read(SOCKET nfs_fd, const fhandle3* file
     RPCSerializer s = {0};
 
     uint32_t read_xid = RPCSerializer_InitCall(&s,
-        PREP_RPC_CALL(NFS_PROGRAM, 3, NFS_READ_PROCEDURE));
+        NFS_PROGRAM, 3, NFS_READ_PROCEDURE);
 
     PushUnixAuthN(&s);
 
 
     int length = fhandle3_length(file);
-    RPCSerializer_PushString(&s, length, (const char*)file->fhandle3);
+    RPCSerializer_PushString(&s, length, (const char*)file->handle);
     RPCSerializer_PushU64(&s, offset);
     RPCSerializer_PushU32(&s, size);
     RPCSerializer_Finalize(&s);
@@ -404,7 +403,7 @@ int64_t nfs_read(SOCKET nfs_fd, const fhandle3* file
     RPCDeserializer_SkipAuth(&d);
     int accept_state = RPCDeserializer_ReadBool(&d);
 
-    nfsstat3 status = RPCDeserializer_ReadU32(&d);
+    nfsstat3 status = (nfsstat3)RPCDeserializer_ReadU32(&d);
     if (status != 0) printf("Status: %s\n", nfsstat3_toChars(status));
     // -----------------------------------------------------
 
@@ -431,7 +430,7 @@ int64_t nfs_read(SOCKET nfs_fd, const fhandle3* file
     while(bufferLeft < arraySize - readAlready)
     {
         // RPCDeserializer_EnsureSize(&d, bufferLeft);
-        memcpy(data + readAlready, d.ReadPtr, bufferLeft);
+        memcpy((uint8_t*)data + readAlready, d.ReadPtr, bufferLeft);
         readAlready += bufferLeft;
         d.ReadPtr += (ALIGN4(bufferLeft) / 4);
         RPCDeserializer_EnsureSize(&d, 4);
@@ -440,7 +439,7 @@ int64_t nfs_read(SOCKET nfs_fd, const fhandle3* file
 
     if (bufferLeft >= arraySize - readAlready)
     {
-        memcpy(data + readAlready, d.ReadPtr, bufferLeft);
+        memcpy((uint8_t*)data + readAlready, d.ReadPtr, bufferLeft);
     }
     else
     {
@@ -466,18 +465,18 @@ int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
     mountlist_t* result = 0;
 
     uint32_t readdirplus_xid = RPCSerializer_InitCall(&s,
-            PREP_RPC_CALL(NFS_PROGRAM, 3, NFS_READDIRPLUS_PROCEDURE));
+            NFS_PROGRAM, 3, NFS_READDIRPLUS_PROCEDURE);
 
     PushUnixAuthN(&s);
 
     int length = fhandle3_length(dir);
-    RPCSerializer_PushString(&s, length, (const char*)dir->fhandle3);
+    RPCSerializer_PushString(&s, length, (const char*)dir->handle);
 
     uint32_t cookie_hi = *cookie >> 32;
-    uint32_t cookie_lw = *cookie & UINT32_MAX;
+    uint32_t cookie_lw = *cookie & 0xFFFFFFFF;
 
     uint32_t cookie_verif_hi = *cookieverf >> 32;
-    uint32_t cookie_verif_lw = *cookieverf & UINT32_MAX;
+    uint32_t cookie_verif_lw = *cookieverf & 0xFFFFFFFF;
 
     RPCSerializer_PushU32(&s, cookie_hi);
     RPCSerializer_PushU32(&s, cookie_lw);
@@ -505,7 +504,7 @@ int nfs_readdirplus(SOCKET nfs_fd, const fhandle3* dir
     RPCDeserializer_SkipAuth(&d);
     int accept_state = RPCDeserializer_ReadBool(&d);
 
-    nfsstat3 status = RPCDeserializer_ReadU32(&d);
+    nfsstat3 status = (nfsstat3)RPCDeserializer_ReadU32(&d);
     if (status != 0) printf("Status: %s\n", nfsstat3_toChars(status));
     // -------------------------------------------------------------------
 
@@ -590,19 +589,19 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir
     mountlist_t* result = 0;
 
     uint32_t readdir_xid = RPCSerializer_InitCall(&s,
-            PREP_RPC_CALL(NFS_PROGRAM, 3, NFS_READDIR_PROCEDURE));
+            NFS_PROGRAM, 3, NFS_READDIR_PROCEDURE);
 
     PushUnixAuthN(&s);
 
 
     int length = fhandle3_length(dir);
-    RPCSerializer_PushString(&s, length, (const char*)dir->fhandle3);
+    RPCSerializer_PushString(&s, length, (const char*)dir->handle);
 
     uint32_t cookie_hi = *cookie >> 32;
-    uint32_t cookie_lw = *cookie & UINT32_MAX;
+    uint32_t cookie_lw = *cookie & 0xFFFFFFFF;
 
     uint32_t cookie_verif_hi = *cookieverf >> 32;
-    uint32_t cookie_verif_lw = *cookieverf & UINT32_MAX;
+    uint32_t cookie_verif_lw = *cookieverf & 0xFFFFFFFF;
 
     RPCSerializer_PushU32(&s, cookie_hi);
     RPCSerializer_PushU32(&s, cookie_lw);
@@ -622,7 +621,7 @@ int nfs_readdir(int nfs_fd, const fhandle3* dir
     int accepted = RPCDeserializer_ReadBool(&d);  //16
     RPCDeserializer_SkipAuth(&d);
     int accept_state = RPCDeserializer_ReadBool(&d);
-    nfsstat3 status = RPCDeserializer_ReadU32(&d);
+    nfsstat3 status = (nfsstat3)RPCDeserializer_ReadU32(&d);
 
     if (status != 0) printf("Status: %s\n", nfsstat3_toChars(status));
 
@@ -725,7 +724,7 @@ int populateCache_cb(const char* fName, const fhandle3* handle,
                 SOCKET newSock = connect_name("192.168.178.26", "2049");
                 nfs_readdirplus(newSock, handle, &cookie, &verifier
                   , populateCache_cb, &newArgs);
-                close(newSock);
+                closesocket(newSock);
             }
         }
         else if (attribs->type == NF3REG)
@@ -762,7 +761,7 @@ uint32_t handleSum(const fhandle3* handle)
 
     for(int i = 0; i < fhandle3_length(handle); i++)
     {
-        sum += handle->fhandle3[i];
+        sum += handle->handle[i];
     }
 
     return sum;

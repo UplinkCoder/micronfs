@@ -73,9 +73,9 @@ fhandle3 ptrToHandle(cache_t* cache, filehandle_ptr_t fh_ptr)
 
     if (compressed_bit)
     {
-        (*(((uint32_t*)result.fhandle3) + 0)) = 0x1000001;
-        (*(((uint32_t*)result.fhandle3) + 1)) = (*((uint32_t*)(cache->rootHandle.fhandle3 + 4)));
-        (*(((uint32_t*)result.fhandle3) + 2)) = (*((uint32_t*)(cache->rootHandle.fhandle3 + 8)));
+        (*(((uint32_t*)result.handle) + 0)) = 0x1000001;
+        (*(((uint32_t*)result.handle) + 1)) = (*((uint32_t*)(cache->rootHandle.handle + 4)));
+        (*(((uint32_t*)result.handle) + 2)) = (*((uint32_t*)(cache->rootHandle.handle + 8)));
         start_copy_limbs = 3;
     }
 
@@ -88,7 +88,7 @@ fhandle3 ptrToHandle(cache_t* cache, filehandle_ptr_t fh_ptr)
         limb < one_past_last;
         limb++)
     {
-        *(((uint32_t*)result.fhandle3) + start_copy_limbs++) = *limb;
+        *(((uint32_t*)result.handle) + start_copy_limbs++) = *limb;
     }
 
     return result;
@@ -98,12 +98,12 @@ filehandle_ptr_t handleToPtr(cache_t* cache, const fhandle3* handle)
 {
     filehandle_ptr_t result = {0};
 
-    const uint32_t* handle_limbs = (uint32_t*)(handle->fhandle3);
+    const uint32_t* handle_limbs = (uint32_t*)(handle->handle);
 
     uint32_t handle_length = (fhandle3_length(handle) >> 2);
     assert(handle_length < 16);
 
-    if(!memcmp(cache->rootHandle.fhandle3, handle->fhandle3, sizeof(fhandle3)))
+    if(!memcmp(cache->rootHandle.handle, handle->handle, sizeof(fhandle3)))
     {
         result.v = 1;
         goto Lret;
@@ -111,16 +111,16 @@ filehandle_ptr_t handleToPtr(cache_t* cache, const fhandle3* handle)
 
     if (handle_limbs[0] == 0x1000001)
     {
-        const uint32_t root1 = (*(((uint32_t*) cache->rootHandle.fhandle3) + 1));
-        const uint32_t root2 = (*(((uint32_t*) cache->rootHandle.fhandle3) + 2));
+        const uint32_t root1 = (*(((uint32_t*) cache->rootHandle.handle) + 1));
+        const uint32_t root2 = (*(((uint32_t*) cache->rootHandle.handle) + 2));
 
         if (handle_limbs[1] == root1
          && handle_limbs[2] == root2)
-         {
-             result.v |= (1 << 31);
-             handle_length -= 3;
-             handle_limbs += 3;
-         }
+        {
+            result.v |= (1 << 31);
+            handle_length -= 3;
+            handle_limbs += 3;
+        }
     }
     result.v |= (handle_length << 27);
 
@@ -192,10 +192,10 @@ Lret:
 name_cache_ptr_t GetOrAddNameByKey(cache_t* cache, const char* name,
                                    uint32_t entry_key)
 {
-
+	name_cache_ptr_t result = {0};
     size_t length = (entry_key >> 16);
     if (!length)
-        return (name_cache_ptr_t) {0};
+        return result;
 
     for(name_cache_node_t* currentBranch = cache->name_cache_root;
         currentBranch;)
@@ -244,12 +244,14 @@ name_cache_ptr_t GetOrAddNameByKey(cache_t* cache, const char* name,
                 memcpy(cached_name, name, length);
                 *(cached_name + length) = '\0';
 
-
                 name_cache_ptr_t name_ptr = { cache->name_stringtable_size + 4 };
                 cache->name_stringtable_size += ALIGN4(length + 1);
 
-                *nextBranch =
-                    (name_cache_node_t){entry_key, 0, 0, name_ptr};
+                nextBranch->entry_key = entry_key;
+                nextBranch->left = 0;
+                nextBranch->right = 0;
+                nextBranch->name_ptr = name_ptr;
+
                 return nextBranch->name_ptr;
             }
         }
@@ -430,7 +432,7 @@ meta_data_entry_t* GetOrCreateSubdirectory(cache_t* cache, cached_dir_t* parentD
 lookup_parent_result_t LookupParent(cache_t* cache, const char* full_path, uint32_t path_length)
 {
     lookup_parent_result_t result;
-    
+
     size_t slash_posiiton = 0;
     const char* end = full_path + path_length;
     for(const char* p = end;
@@ -456,7 +458,7 @@ lookup_parent_result_t LookupParent(cache_t* cache, const char* full_path, uint3
     result.parentDir = (parent_dir_entry ? parent_dir_entry->cached_dir : 0);
     result.entry_name = last_component_ptr;
     result.entry_name_length = last_component_length;
-    
+
     return result;
 }
 
@@ -467,10 +469,10 @@ meta_data_entry_t* GetOrCreateEntryFromFullPath(cache_t* cache,
     meta_data_entry_t* result = 0;
     assert(full_path[0] == '/');
 
-    lookup_parent_result_t p = 
+    lookup_parent_result_t p =
         LookupParent(cache, full_path, path_length);
 
- 
+
     cached_dir_t* currentDir = cache->root->cached_dir;
     uint32_t path_remaining = path_length - 1;
     const char* begin_segment = full_path + 1;
@@ -488,13 +490,13 @@ meta_data_entry_t* GetOrCreateEntryFromFullPath(cache_t* cache,
         for (;;)
         {
             const char *end_segment =
-                memchr(begin_segment, '/', path_remaining);
+                (char*)memchr(begin_segment, '/', path_remaining);
             if (end_segment == 0)
                 break;
 
             size_t segment_length = end_segment - begin_segment;
             segment_key = EntryKey(begin_segment, segment_length);
-            currentDir = 
+            currentDir =
                 GetOrCreateSubdirectoryByKey(cache, currentDir,
                                              begin_segment, segment_key)->cached_dir;
             begin_segment += segment_length + 1;
@@ -503,7 +505,7 @@ meta_data_entry_t* GetOrCreateEntryFromFullPath(cache_t* cache,
         if (!segment_key)
             segment_key = EntryKey(begin_segment, path_remaining);
     }
-    
+
     result = LookupInDirectoryByKey(cache, currentDir, begin_segment, segment_key);
     if (!result)
     {
@@ -521,9 +523,9 @@ meta_data_entry_t* GetOrCreateEntryFromFullPath(cache_t* cache,
 meta_data_entry_t* CreateEntryFromFullPath(cache_t* cache,
                                            const char* full_path, size_t path_length)
 {
-    meta_data_entry_t * result = 
+    meta_data_entry_t * result =
         GetOrCreateEntryFromFullPath(cache, full_path, path_length, 1);
-    
+
     return result;
 }
 

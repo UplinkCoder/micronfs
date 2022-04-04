@@ -1,7 +1,11 @@
 #ifndef __ENDIAN_H_
 #define __ENDIAN_H_
 
-#include <stdint.h>
+#ifdef _WIN32
+#  include "stdint_msvc.h"
+#else
+#  include <stdint.h>
+#endif
 
 #define NTOHL HTONL
 #define NTOHS HTONS
