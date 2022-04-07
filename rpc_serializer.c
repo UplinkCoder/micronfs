@@ -155,6 +155,7 @@ static inline void RPCDeserializer_RefillBuffer(RPCDeserializer* self)
     int RecivedBytes =
         recv(self->SockFd, (char*)self->BufferPtr + oldSize, self->MaxBuffer - oldSize, 0);
     // printf("Refill recv: %d\n", RecivedBytes);
+    // TODO loop here to recv everything until there are no missing bytes
     int missing_bytes = self->MaxBuffer - (oldSize + RecivedBytes);
 
     self->FragmentSizeLeft -= RecivedBytes;
@@ -283,6 +284,82 @@ fattr3 RPCDeserializer_ReadFileAttribs(RPCDeserializer* self)
     self->ReadPtr = (const uint32_t*)ReadPtr;
 
     return result;
+}
+
+void RPCSerializer_PushSattr3(RPCSerializer* self, const sattr3* sattr)
+{
+    // push field set
+    uint32_t set_fields = sattr->set_fields;
+
+    if (set_fields & SATTR_FIELD_MODE)
+    {
+        RPCSerializer_PushU32(self, 1);
+        RPCSerializer_PushU32(self, sattr->mode);
+    }
+    else
+    {
+        RPCSerializer_PushU32(self, 0);
+    }
+
+    if (set_fields & SATTR_FIELD_UID)
+    {
+        RPCSerializer_PushU32(self, 1);
+        RPCSerializer_PushU32(self, sattr->uid);
+    }
+    else
+    {
+        RPCSerializer_PushU32(self, 0);
+    }
+
+    if (set_fields & SATTR_FIELD_GID)
+    {
+        RPCSerializer_PushU32(self, 1);
+        RPCSerializer_PushU32(self, sattr->gid);
+    }
+    else
+    {
+        RPCSerializer_PushU32(self, 0);
+    }
+
+    if (set_fields & SATTR_FIELD_SIZE)
+    {
+        RPCSerializer_PushU32(self, 1);
+        RPCSerializer_PushU64(self, sattr->size);
+    }
+    else
+    {
+        RPCSerializer_PushU32(self, 0);
+    }
+
+    if (set_fields & SATTR_FIELD_ATIME)
+    {
+        RPCSerializer_PushU32(self, 1);
+        RPCSerializer_PushU64(self, *(uint64_t*)&sattr->atime);
+    }
+    else
+    {
+        RPCSerializer_PushU32(self, 0);
+    }
+
+    if (set_fields & SATTR_FIELD_MTIME)
+    {
+        RPCSerializer_PushU32(self, 1);
+        RPCSerializer_PushU32(self, *(uint64_t*)&sattr->mtime);
+    }
+    else
+    {
+        RPCSerializer_PushU32(self, 0);
+    }
+}
+
+void RPCSerializer_PushEmptySattr3(RPCSerializer* self)
+{
+    RPCSerializer_PushU32(self, 0); // mode
+    RPCSerializer_PushU32(self, 0); // uid
+    RPCSerializer_PushU32(self, 0); // gid
+    RPCSerializer_PushU32(self, 0); // size
+    RPCSerializer_PushU32(self, 0); // atime
+    RPCSerializer_PushU32(self, 0); // mtime
 }
 
 uint64_t RPCDeserializer_ReadU64(RPCDeserializer* self)

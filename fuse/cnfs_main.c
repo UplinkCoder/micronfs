@@ -18,8 +18,9 @@
  * \include hello.c
  */
 
-
-#define FUSE_USE_VERSION 26
+#ifndef FUSE_USE_VERSION
+#  define FUSE_USE_VERSION 26
+#endif
 
 #ifndef _cplusplus
 #  include <stdbool.h>
@@ -40,25 +41,10 @@
 
 DEFN_PRINT_NAME_CACHE
 
-typedef struct fileList_t {
-    const char* name;
-    struct fileList_t* parent;
-    uint32_t bitarray_entires; // bit 31 indicates a directory
-                               // bits 0-26 stand for a-z entries exisitng bit 26 stands for anything else
-                               // bits 27-31 have no meaning at the moment
-    union
-    {
-        struct {
-            int n_entires;
-            struct fileList_t* entries;
-        }; // for direcories
+#ifndef SOCKET
+#  define SOCKET int
+#endif
 
-        struct {
-            uint32_t size;
-
-        } // for files
-    };
-} fileList_t;
 /*
  * Command line options
  *
@@ -163,7 +149,7 @@ static int cnfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	(void) offset;
 	(void) fi;
 
-    AddLog("readdir; path='%s', offset=%d", path, offset);
+    AddLog("readdir; path='%s', offset=%d", path, (int)offset);
 
 	filler(buf, ".", NULL,  0);
 	filler(buf, "..", NULL, 0);
@@ -244,7 +230,7 @@ static int cnfs_mkdir (const char *full_path, mode_t mode)
         return -ENOENT;
 
     if (!GetOrCreateSubdirectory(&dirCache,
-        p.parentDir, p.entry_name, p.entry_name_length))
+        p.parentDir->cached_dir, p.entry_name, p.entry_name_length))
     {
         return -EEXIST;
     }
@@ -264,7 +250,7 @@ static int cnfs_open(const char *path, struct fuse_file_info *fi)
     {
         return 0;
     }
-    char* mPath = path + 1;
+    const char* mPath = path + 1;
     meta_data_entry_t* entry = LookupPath(&dirCache, path, strlen(path));
 
     if (entry)
@@ -294,7 +280,20 @@ static int cnfs_write(const char *path, const char *buf, size_t size, off_t offs
     e = LookupPath(&dirCache, path, strlen(path));
     if (e)
     {
-        AddFile(&dirCache, path, buf, size, 1);
+        int isVirtual = e->flags & ENTRY_FLAG_VIRTUAL;
+        if (!offset)
+        {
+            AddFile(&dirCache, path, buf, size, isVirtual);
+        }
+        else
+        {
+            UpdateFile(&dirCache, path, buf, size, offset, isVirtual);
+        }
+        if (!isVirtual)
+        {
+
+        }
+
         return size;
     }
     else
@@ -302,6 +301,17 @@ static int cnfs_write(const char *path, const char *buf, size_t size, off_t offs
         return -ENOENT;
     }
 }
+fhandle3 nfs_create(SOCKET nfs_sock_fd, const fhandle3* parentDir, const char* filename);
+
+/*
+    #define	__S_IFDIR	0040000	// Directory.
+    #define	__S_IFCHR	0020000	// Character device.
+    #define	__S_IFBLK	0060000	// Block device.
+    #define	__S_IFREG	0100000	// Regular file.
+    #define	__S_IFIFO	0010000	// FIFO.
+    #define	__S_IFLNK	0120000	// Symbolic link.
+    #define	__S_IFSOCK	0140000	// Socket.
+*/
 
 static int cnfs_mknod(const char * path, mode_t mode, dev_t dev)
 {
@@ -310,9 +320,34 @@ static int cnfs_mknod(const char * path, mode_t mode, dev_t dev)
         return -EEXIST;
     }
 
-    AddFile(&dirCache, path, 0, 0, 1);
+    if (!(mode & S_IFREG))
+    {
+        return -EINVAL;
+    }
+
+    lookup_parent_result_t result =
+        LookupParent(&dirCache, path, strlen(path));
+
+    meta_data_entry_t* file =
+        LookupInDirectory(&dirCache, result.parentDir->cached_dir, result.entry_name, result.entry_name_length);
+
+    if (file)
+    {
+        return -EEXIST;
+    }
+
+    // const char* parentPath = toCharPtr(&dirCache, result.parentDir->cached_dir->fullPath);
+    // LookupPath(&dirCache, parentPath, strlen(parentPath));
+    fhandle3 dirHandle = ptrToHandle(&dirCache, result.parentDir->handle);
+    fhandle3 handle =
+        nfs_create(nfs_sock_fd, &dirHandle, result.entry_name);
+
+    meta_data_entry_t* entry =
+        CreateFileEntry(&dirCache, result.parentDir, result.entry_name, result.entry_name_length);
+    entry->handle = handleToPtr(&dirCache, &handle);
     return 0;
 }
+
 int nfs_read(int sock, const fhandle3*, void* data, uint32_t size, uint64_t offset);
 
 static int cnfs_read(const char *path, char *buf, size_t size, off_t offset,
@@ -345,7 +380,7 @@ static int cnfs_read(const char *path, char *buf, size_t size, off_t offset,
     }
     else
     {
-        AddLog("reading file: %s size: %u offset %u", path, size, offset);
+        AddLog("reading file: %s size: %u offset %u", path, (unsigned int)size, (unsigned int)offset);
 
         meta_data_entry_t* entry =
             LookupPath(&dirCache, path, strlen(path));
@@ -421,6 +456,7 @@ void FreeEntry(cache_t* cache, cached_dir_t* parentDir, meta_data_entry_t* entry
     }
     parentDir->entries_size--;
 }
+
 /** Remove a file */
 int cnfs_unlink (const char * full_path)
 {
@@ -433,15 +469,21 @@ int cnfs_unlink (const char * full_path)
     }
 
     meta_data_entry_t * file =
-        LookupInDirectory(&dirCache, result.parentDir,
+        LookupInDirectory(&dirCache, result.parentDir->cached_dir,
             result.entry_name, result.entry_name_length);
     if (!file)
     {
         return -ENOENT;
     }
-    assert(file->type == ENTRY_TYPE_FILE);
 
-    FreeEntry(&dirCache, result.parentDir, file);
+    if (file->type == ENTRY_TYPE_DIRECTORY)
+    {
+        return -EISDIR;
+    }
+
+    FreeEntry(&dirCache, result.parentDir->cached_dir, file);
+
+    return 0;
 }
 
 /** Remove a directory */
@@ -456,7 +498,7 @@ int cnfs_rmdir (const char * full_path)
     }
 
     meta_data_entry_t * dir =
-        LookupInDirectory(&dirCache, result.parentDir,
+        LookupInDirectory(&dirCache, result.parentDir->cached_dir,
             result.entry_name, result.entry_name_length);
 
     if (!dir)
@@ -468,7 +510,7 @@ int cnfs_rmdir (const char * full_path)
     {
         return -ENOTEMPTY;
     }
-    FreeEntry(&dirCache, result.parentDir, dir);
+    FreeEntry(&dirCache, result.parentDir->cached_dir, dir);
 }
 
 static const struct fuse_operations cnfs_oper = {

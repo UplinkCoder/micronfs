@@ -93,8 +93,11 @@ void RPCSerializer_PushString(RPCSerializer* self,
 void RPCSerializer_PushU32Array(RPCSerializer *self,
                                 uint32_t n_elements, const uint32_t array[]);
 
+void RPCSerializer_PushEmptySattr3(RPCSerializer* self);
+
 void RPCSerializer_Finalize(RPCSerializer* self);
 int RPCSerializer_Send(RPCSerializer* self, SOCKET sock_fd);
+
 
 #ifdef _MSC_VER
 #  if _MSC_VER <= 1800

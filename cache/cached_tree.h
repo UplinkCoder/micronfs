@@ -151,13 +151,13 @@ typedef struct cache_t
     uint32_t limbs_capacity;
 
     fhandle3 rootHandle;
-    
+
     freelist_entry_t* freelist;
 } cache_t;
 
 typedef struct lookup_parent_result_t
 {
-    cached_dir_t* parentDir;
+    meta_data_entry_t* parentDir;
     const char* entry_name;
     uint32_t entry_name_length;
 } lookup_parent_result_t;
@@ -188,6 +188,9 @@ name_cache_ptr_t GetOrAddNameLength(cache_t* cache, const char* name,
 meta_data_entry_t* CreateEntryInDirectoryByKey(cache_t* cache, cached_dir_t* parentDir,
                                                const char* name, uint32_t entry_key);
 
+meta_data_entry_t* CreateFileEntry(cache_t* cache, meta_data_entry_t* parentDir,
+                                   const char* fName, uint32_t name_len);
+
 const char* toCharPtr(cache_t* cache, name_cache_ptr_t ptr);
 
 void ResetCache(cache_t* cache);
@@ -199,6 +202,10 @@ fhandle3 ptrToHandle(cache_t* cache, filehandle_ptr_t fh_ptr);
 /// Adds or updates a file
 meta_data_entry_t* AddFile(cache_t* cache, const char* full_path,
                             const void* content, uint32_t content_size, int virtual_file);
+/// Updates file content
+meta_data_entry_t* UpdateFile(cache_t* cache, const char* full_path,
+                              const void* content, uint32_t content_size, uint32_t offset,
+                              int virtual_file);
 #ifdef _MSC_VER
 #  if _MSC_VER <= 1800
 #    define inline

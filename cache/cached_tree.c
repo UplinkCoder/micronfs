@@ -276,6 +276,24 @@ name_cache_ptr_t GetOrAddName(cache_t* cache, const char* name)
     return GetOrAddNameLength(cache, name, strlen(name));
 }
 
+meta_data_entry_t* CreateFileEntry(cache_t* cache, meta_data_entry_t* parentDir, const char* fName, uint32_t name_len)
+{
+    const uint32_t entry_key = EntryKey(fName, name_len);
+
+    meta_data_entry_t* entry =
+        CreateEntryInDirectoryByKey(cache, parentDir->cached_dir, fName, entry_key);
+    assert(entry);
+    entry->type = ENTRY_TYPE_FILE;
+    assert(cache->file_entries_capacity > cache->file_entries_size);
+    entry->cached_file = cache->file_entries + cache->file_entries_size++;
+
+    entry->cached_file->crc32 = 0;
+    entry->cached_file->data = 0;
+    entry->cached_file->size = 0;
+
+    return entry;
+}
+
 void ResetCache(cache_t* cache)
 {
     cache->toc_size = 0;
@@ -431,31 +449,35 @@ meta_data_entry_t* GetOrCreateSubdirectory(cache_t* cache, cached_dir_t* parentD
 
 lookup_parent_result_t LookupParent(cache_t* cache, const char* full_path, uint32_t path_length)
 {
+    unsigned int slash_position = 0;
     lookup_parent_result_t result;
 
-    size_t slash_posiiton = 0;
-    const char* end = full_path + path_length;
-    for(const char* p = end;
+    for(const char* p = full_path + (path_length - 1);
         p > full_path;
         p--
     )
     {
         if (*p == '/')
         {
-            slash_posiiton =  p - full_path;
+            slash_position =  p - full_path;
             break;
         }
     }
 
-    size_t last_component_length = path_length - (slash_posiiton + 1);
-    const char* last_component_ptr = full_path + (slash_posiiton + 1);
+    size_t last_component_length = path_length - (slash_position + 1);
+    const char* last_component_ptr = full_path + (slash_position + 1);
 
-    size_t dir_path_size = path_length - (last_component_length + !!slash_posiiton);
+    size_t dir_path_size = path_length - (last_component_length + 1);
     const uint32_t dir_entry_key = EntryKey(full_path, dir_path_size);
 
-    meta_data_entry_t* parent_dir_entry
-        = LookupPath(cache, full_path, dir_path_size);
-    result.parentDir = (parent_dir_entry ? parent_dir_entry->cached_dir : 0);
+    meta_data_entry_t* parentDir = cache->root;
+    if (dir_path_size > 1)
+    {
+        parentDir =
+            LookupDirPathByKey(cache, full_path, dir_entry_key);
+    }
+
+    result.parentDir = parentDir;
     result.entry_name = last_component_ptr;
     result.entry_name_length = last_component_length;
 
@@ -480,7 +502,7 @@ meta_data_entry_t* GetOrCreateEntryFromFullPath(cache_t* cache,
 
     if (p.parentDir)
     {
-        currentDir = p.parentDir;
+        currentDir = p.parentDir->cached_dir;
         begin_segment = p.entry_name;
         path_remaining = p.entry_name_length;
         segment_key = EntryKey(begin_segment, path_remaining);
@@ -609,7 +631,48 @@ meta_data_entry_t* AddFile(cache_t* cache, const char* full_path,
 
     return result;
 }
+meta_data_entry_t* UpdateFile(cache_t* cache, const char* full_path,
+                              const void* content, uint32_t content_size, uint32_t offset,
+                              int virtual_file)
+{
+    uint16_t path_length = (uint16_t)strlen(full_path);
 
+    meta_data_entry_t* result
+        = LookupPath(cache, full_path, path_length);
+
+    if (!result)
+    {
+        err = -ENOENT;
+        return 0;
+    }
+
+    assert((!(result->flags & ENTRY_FLAG_VIRTUAL)) == !virtual_file);
+
+    assert(result->type == ENTRY_TYPE_FILE);
+    cached_file_t *file =  result->cached_file;
+
+    if (content)
+    {
+        uint32_t content_crc = crc32c(~0, content, content_size);
+
+        size_t at_least = content_size + offset;
+
+        if (file->size >= at_least)
+        {
+            uint32_t file_portion_crc =
+                crc32c(~0, file->data + offset, content_size);
+            if (content_crc == file_portion_crc)
+                goto Lret;
+        }
+        if (at_least > file->size)
+            file->data = realloc(file->data, at_least);
+
+        memcpy(file->data + offset, content, content_size);
+        file->crc32 = crc32c(~0, file->data, at_least);
+    }
+Lret:
+    return result;
+}
 
 #if TEST_CACHE
 

@@ -100,6 +100,7 @@ void PushUnixAuthN(RPCSerializer* self)
 #define NFS_READ_PROCEDURE           6
 #define NFS_WRITE_PROCEDURE          7
 #define NFS_CREATE_PROCEDURE         8
+#define NFS_MKNOD_PROCEDURE         11
 #define NFS_READDIR_PROCEDURE       16
 #define NFS_READDIRPLUS_PROCEDURE   17
 #define MESSAGE_TYPE_CALL 0
@@ -372,6 +373,26 @@ mountlist_t* mountd_dump(int mountd_fd)
     return result;
 }
 
+fhandle3 nfs_mknod(SOCKET nfs_sock_fd, const fhandle3* parentDir, const char* filename)
+{
+    fhandle3 result = {0};
+    RPCSerializer s = {0};
+
+    uint32_t read_xid = RPCSerializer_InitCall(&s,
+        NFS_PROGRAM, 3, NFS_MKNOD_PROCEDURE);
+
+    PushUnixAuthN(&s);
+
+
+    uint32_t length = fhandle3_length(parentDir);
+    RPCSerializer_PushString(&s, length, (const char*)parentDir);
+    uint32_t fn_length = strlen(filename);
+    RPCSerializer_PushString(&s, fn_length, filename);
+    RPCSerializer_PushU32(&s, GUARDED);
+
+    assert (0); // Not implemented
+    return result;
+}
 
 int64_t nfs_read(SOCKET nfs_fd, const fhandle3* file
                , void* data, uint32_t size
@@ -425,7 +446,7 @@ int64_t nfs_read(SOCKET nfs_fd, const fhandle3* file
     int eof = RPCDeserializer_ReadU32(&d) != 0;
     uint32_t arraySize = RPCDeserializer_ReadU32(&d);
     uint32_t bufferLeft = RPCDeserializer_BufferLeft(&d);
-    
+
     uint32_t readAlready = 0;
     while(bufferLeft < arraySize - readAlready)
     {

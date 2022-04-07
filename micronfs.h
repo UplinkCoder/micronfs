@@ -147,11 +147,35 @@ typedef struct fattr3 {
     nfstime3   ctime;
 } fattr3;
 
-typedef struct fhandle3
-{
+typedef struct fhandle3 {
     uint8_t handle[64];
 } fhandle3;
 
+typedef enum sattr_field {
+    SATTR_FIELD_MODE = (1 << 0),
+    SATTR_FIELD_UID = (1 << 1),
+    SATTR_FIELD_GID = (1 << 2),
+    SATTR_FIELD_SIZE = (1 << 3),
+    SATTR_FIELD_ATIME = (1 << 4),
+    SATTR_FIELD_MTIME = (1 << 5)
+} sattr_field;
+
+typedef struct sattr3 {
+    uint32_t set_fields;
+
+    mode3   mode;
+    uid3    uid;
+    gid3    gid;
+    size3   size;
+    nfstime3 atime;
+    nfstime3 mtime;
+} sattr3;
+
+typedef struct wcc_attr {
+    size3     size;
+    nfstime3  mtime;
+    nfstime3  ctime;
+} wcc_attr;
 
 #pragma pack(pop)
 #endif

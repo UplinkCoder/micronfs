@@ -100,7 +100,7 @@ int main(int argc, char* argv[])
     for(meta_data_entry_t* entry = root.entries;
          entry < one_past_last_entry; entry++)
     {
-        printf("%d: ", entry - root.entries);
+        printf("%d: ", (int)(entry - root.entries));
         printf("\t%s\n", dirCache.name_stringtable + (entry->name.v - 4));
 
         if (entry->type == ENTRY_TYPE_DIRECTORY)
