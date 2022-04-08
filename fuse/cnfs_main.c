@@ -101,7 +101,7 @@ static int cnfs_getattr(const char *path, struct stat *stbuf)
 {
     assert(path[0] == '/');
 	int res = 0;
-    AddLog("getattr: path='%s'\n", path);
+    //AddLog("getattr: path='%s'\n", path);
 	memset(stbuf, 0, sizeof(struct stat));
 	if (path[1] == 0) {
 		stbuf->st_mode = S_IFDIR | 0755;
@@ -120,7 +120,6 @@ static int cnfs_getattr(const char *path, struct stat *stbuf)
         if (entry)
         {
             int isDir = entry->type == ENTRY_TYPE_DIRECTORY;
-            printf("Got entry\n");
             if (isDir)
             {
         		stbuf->st_mode = S_IFDIR | 0755;
@@ -149,7 +148,7 @@ static int cnfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	(void) offset;
 	(void) fi;
 
-    AddLog("readdir; path='%s', offset=%d", path, (int)offset);
+    // AddLog("readdir; path='%s', offset=%d", path, (int)offset);
 
 	filler(buf, ".", NULL,  0);
 	filler(buf, "..", NULL, 0);
@@ -221,7 +220,7 @@ static const char* EatAndCountDotDotPath(const char* path, int* levels_upP)
 
 static int cnfs_mkdir (const char *full_path, mode_t mode)
 {
-    AddLog("mkdir: '%s'", full_path);
+    // AddLog("mkdir: '%s'", full_path);
     mode |= S_IFDIR;
 
     lookup_parent_result_t p = LookupParent(&dirCache, full_path, strlen(full_path));
@@ -270,6 +269,7 @@ static int cnfs_open(const char *path, struct fuse_file_info *fi)
 
 	return 0;
 }
+int nfs_write(int sock, const fhandle3*, const void* data, uint32_t size, uint64_t offset);
 
 static int cnfs_write(const char *path, const char *buf, size_t size, off_t offset,
 		      struct fuse_file_info *fi)
@@ -289,9 +289,11 @@ static int cnfs_write(const char *path, const char *buf, size_t size, off_t offs
         {
             UpdateFile(&dirCache, path, buf, size, offset, isVirtual);
         }
+
         if (!isVirtual)
         {
-
+            fhandle3 handle = ptrToHandle(&dirCache, e->handle);
+            nfs_write(nfs_sock_fd, &handle, (const void*)buf, size, offset);
         }
 
         return size;
@@ -301,7 +303,7 @@ static int cnfs_write(const char *path, const char *buf, size_t size, off_t offs
         return -ENOENT;
     }
 }
-fhandle3 nfs_create(SOCKET nfs_sock_fd, const fhandle3* parentDir, const char* filename);
+fhandle3 nfs_create(SOCKET nfs_sock_fd, const fhandle3* parentDir, const char* filename, mode3 mode);
 
 /*
     #define	__S_IFDIR	0040000	// Directory.
@@ -340,7 +342,7 @@ static int cnfs_mknod(const char * path, mode_t mode, dev_t dev)
     // LookupPath(&dirCache, parentPath, strlen(parentPath));
     fhandle3 dirHandle = ptrToHandle(&dirCache, result.parentDir->handle);
     fhandle3 handle =
-        nfs_create(nfs_sock_fd, &dirHandle, result.entry_name);
+        nfs_create(nfs_sock_fd, &dirHandle, result.entry_name, mode & 0xFFFF);
 
     meta_data_entry_t* entry =
         CreateFileEntry(&dirCache, result.parentDir, result.entry_name, result.entry_name_length);
@@ -380,7 +382,7 @@ static int cnfs_read(const char *path, char *buf, size_t size, off_t offset,
     }
     else
     {
-        AddLog("reading file: %s size: %u offset %u", path, (unsigned int)size, (unsigned int)offset);
+        // AddLog("reading file: %s size: %u offset %u", path, (unsigned int)size, (unsigned int)offset);
 
         meta_data_entry_t* entry =
             LookupPath(&dirCache, path, strlen(path));
@@ -457,6 +459,9 @@ void FreeEntry(cache_t* cache, cached_dir_t* parentDir, meta_data_entry_t* entry
     parentDir->entries_size--;
 }
 
+
+void nfs_remove(SOCKET nfs_fd, fhandle3* dirHandle, const char* filename, uint32_t filename_length);
+
 /** Remove a file */
 int cnfs_unlink (const char * full_path)
 {
@@ -481,6 +486,9 @@ int cnfs_unlink (const char * full_path)
         return -EISDIR;
     }
 
+    fhandle3 handle = ptrToHandle(&dirCache, result.parentDir->handle);
+    nfs_remove(nfs_sock_fd, &handle, result.entry_name, result.entry_name_length);
+    
     FreeEntry(&dirCache, result.parentDir->cached_dir, file);
 
     return 0;
@@ -553,6 +561,7 @@ int main(int argc, char *argv[])
     log_buffer = malloc(sizeof(char[65536]));
 
     nfs_init_cache(&dirCache, 1, argv);
+    
     nfs_sock_fd = connect_name("192.168.178.26", "2049");
 
 	/* Set defaults -- we have to use strdup so that

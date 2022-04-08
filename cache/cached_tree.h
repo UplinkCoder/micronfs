@@ -151,7 +151,7 @@ typedef struct cache_t
     uint32_t limbs_capacity;
 
     fhandle3 rootHandle;
-
+    
     freelist_entry_t* freelist;
 } cache_t;
 
@@ -187,10 +187,10 @@ name_cache_ptr_t GetOrAddNameLength(cache_t* cache, const char* name,
 
 meta_data_entry_t* CreateEntryInDirectoryByKey(cache_t* cache, cached_dir_t* parentDir,
                                                const char* name, uint32_t entry_key);
-
+                                               
 meta_data_entry_t* CreateFileEntry(cache_t* cache, meta_data_entry_t* parentDir,
                                    const char* fName, uint32_t name_len);
-
+                                   
 const char* toCharPtr(cache_t* cache, name_cache_ptr_t ptr);
 
 void ResetCache(cache_t* cache);

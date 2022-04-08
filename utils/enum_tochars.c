@@ -17,7 +17,7 @@ typedef struct enum_def_t
     uint8_t* sz_members;
     uint8_t* sz_values;
     uint8_t n_members;
-    const char* end; 
+    const char* end;
 } enum_def_t;
 
 enum_def_t findEnum(const char* start)
@@ -96,13 +96,13 @@ enum_def_t findEnum(const char* start)
                 result.end = found;
                 result.n_members++;
 
-                result.sz_members = (uint8_t*) 
+                result.sz_members = (uint8_t*)
                     malloc(result.n_members);
-                result.sz_values =  (uint8_t*) 
+                result.sz_values =  (uint8_t*)
                     malloc(result.n_members);
-                result.member_names =  (char**) 
+                result.member_names =  (char**)
                     malloc(result.n_members * sizeof(char**));
-                result.member_values =  (char**) 
+                result.member_values =  (char**)
                     malloc(result.n_members * sizeof(char**));
 
                 for(int i = 0; i < result.n_members; i++)
@@ -122,7 +122,7 @@ enum_def_t findEnum(const char* start)
 
             found++;
         }
-        return result;          
+        return result;
     }
     result.name = 0;
     return result;
@@ -142,7 +142,7 @@ int main(int argc, char* argv[])
         char* buffer = (char*)malloc(sz + 1);
         fread(buffer, 1, sz, fd);
         buffer[sz] = '\0';
-        
+
         char path[256];
         sprintf(path, "%s.out", argv[1]);
         enum_def_t r = findEnum(buffer);

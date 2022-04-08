@@ -451,7 +451,7 @@ lookup_parent_result_t LookupParent(cache_t* cache, const char* full_path, uint3
 {
     unsigned int slash_position = 0;
     lookup_parent_result_t result;
-
+    
     for(const char* p = full_path + (path_length - 1);
         p > full_path;
         p--
@@ -639,27 +639,27 @@ meta_data_entry_t* UpdateFile(cache_t* cache, const char* full_path,
 
     meta_data_entry_t* result
         = LookupPath(cache, full_path, path_length);
-
+    
     if (!result)
     {
         err = -ENOENT;
         return 0;
     }
-
+    
     assert((!(result->flags & ENTRY_FLAG_VIRTUAL)) == !virtual_file);
 
     assert(result->type == ENTRY_TYPE_FILE);
     cached_file_t *file =  result->cached_file;
-
+    
     if (content)
     {
         uint32_t content_crc = crc32c(~0, content, content_size);
-
+        
         size_t at_least = content_size + offset;
-
+        
         if (file->size >= at_least)
         {
-            uint32_t file_portion_crc =
+            uint32_t file_portion_crc = 
                 crc32c(~0, file->data + offset, content_size);
             if (content_crc == file_portion_crc)
                 goto Lret;
@@ -668,7 +668,7 @@ meta_data_entry_t* UpdateFile(cache_t* cache, const char* full_path,
             file->data = realloc(file->data, at_least);
 
         memcpy(file->data + offset, content, content_size);
-        file->crc32 = crc32c(~0, file->data, at_least);
+        file->crc32 = crc32c(~0, file->data, at_least);        
     }
 Lret:
     return result;
