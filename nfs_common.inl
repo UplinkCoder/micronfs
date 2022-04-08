@@ -137,7 +137,7 @@ void InitCache(cache_t* cache)
         initial_dir_nodes, sizeof(cached_dir_t));
 
     uint32_t* limbs_mem = (uint32_t*) calloc(
-        initial_limb_capacity , sizeof(uint32_t));
+        initial_limb_capacity, sizeof(uint32_t));
 
     cached_file_t* files_mem = (cached_file_t*)
         calloc(initial_files_capacity, sizeof(cached_file_t));
@@ -373,12 +373,100 @@ mountlist_t* mountd_dump(int mountd_fd)
     return result;
 }
 
+void ReadWcc(RPCDeserializer* self)
+{
+    wcc_attr pre_op;
+    fattr3 post_op;
+    if (RPCDeserializer_ReadBool(self))
+    {
+        pre_op.size = RPCDeserializer_ReadU64(self);
+        uint64_t mtime_u64 = RPCDeserializer_ReadU64(self);
+        pre_op.mtime = *(nfstime3*) &mtime_u64;
+        uint64_t ctime_u64 = RPCDeserializer_ReadU64(self);
+        pre_op.ctime = *(nfstime3*)&ctime_u64;
+    }
+    if (RPCDeserializer_ReadBool(self))
+    {
+        post_op = RPCDeserializer_ReadFileAttribs(self);
+    }
+}
+
+fhandle3 nfs_create(SOCKET nfs_fd, const fhandle3* parentDir, const char* filename, mode3 mode)
+{
+    fhandle3 result = {0};
+    RPCSerializer s = {0};
+
+    uint32_t create_xid = RPCSerializer_InitCall(&s,
+        NFS_PROGRAM, 3, NFS_CREATE_PROCEDURE);
+
+    PushUnixAuthN(&s);
+
+    uint32_t length = fhandle3_length(parentDir);
+    RPCSerializer_PushString(&s, length, (const char*)parentDir);
+    uint32_t fn_length = strlen(filename);
+    RPCSerializer_PushString(&s, fn_length, filename);
+    RPCSerializer_PushU32(&s, GUARDED);
+
+    // push mode
+    RPCSerializer_PushU32(&s, 1);
+    RPCSerializer_PushU32(&s, mode);
+
+    RPCSerializer_PushU32(&s, 0); // no uid
+    RPCSerializer_PushU32(&s, 0); // no gid
+    RPCSerializer_PushU32(&s, 0); // no size
+    RPCSerializer_PushU32(&s, 0); // no atime
+    RPCSerializer_PushU32(&s, 0); // no mtime
+
+
+
+    RPCSerializer_Finalize(&s);
+    RPCSerializer_Send(&s, nfs_fd);
+
+    // -------------------------------------------
+
+    RPCDeserializer d = {0};
+    RPCDeserializer_Init(&d, nfs_fd);
+
+    RPCHeader header = RPCDeserializer_RecvHeader(&d);
+
+    assert(header.xid == create_xid);
+
+    int accepted = RPCDeserializer_ReadBool(&d);
+    RPCDeserializer_SkipAuth(&d);
+    int accept_state = RPCDeserializer_ReadBool(&d);
+
+    nfsstat3 status = (nfsstat3)RPCDeserializer_ReadU32(&d);
+    if (status != 0) printf("Status: %s\n", nfsstat3_toChars(status));
+
+
+    if (status == 0)
+    {
+        if (RPCDeserializer_ReadBool(&d))
+        {
+            result = RPCDeserializer_ReadFileHandle(&d);
+        }
+
+        if (RPCDeserializer_ReadBool(&d))
+        {
+            fattr3 attrs = RPCDeserializer_ReadFileAttribs(&d);
+        }
+    }
+
+    ReadWcc(&d);
+}
+
+
+void nfs_remove(SOCKET nfs_fd, fhandle3* dirHandle, const char* filename, uint32_t filename_length)
+{
+
+}
+
 fhandle3 nfs_mknod(SOCKET nfs_sock_fd, const fhandle3* parentDir, const char* filename)
 {
     fhandle3 result = {0};
     RPCSerializer s = {0};
 
-    uint32_t read_xid = RPCSerializer_InitCall(&s,
+    uint32_t mknod_xid = RPCSerializer_InitCall(&s,
         NFS_PROGRAM, 3, NFS_MKNOD_PROCEDURE);
 
     PushUnixAuthN(&s);
@@ -389,10 +477,73 @@ fhandle3 nfs_mknod(SOCKET nfs_sock_fd, const fhandle3* parentDir, const char* fi
     uint32_t fn_length = strlen(filename);
     RPCSerializer_PushString(&s, fn_length, filename);
     RPCSerializer_PushU32(&s, GUARDED);
+        // push sattr3
+    RPCSerializer_PushEmptySattr3(&s);
+    // ---------------------------------------------
+
 
     assert (0); // Not implemented
     return result;
 }
+
+int64_t nfs_write(SOCKET nfs_fd, const fhandle3* file
+               , const void* data, uint32_t size
+               , uint64_t offset)
+{
+    RPCSerializer s = {0};
+
+    uint32_t write_xid = RPCSerializer_InitCall(&s,
+        NFS_PROGRAM, 3, NFS_WRITE_PROCEDURE);
+
+    PushUnixAuthN(&s);
+
+
+    int length = fhandle3_length(file);
+    RPCSerializer_PushString(&s, length, (const char*)file->handle);
+    RPCSerializer_PushU64(&s, offset);
+    RPCSerializer_PushU32(&s, size);
+    RPCSerializer_PushU32(&s, FILE_SYNC);
+
+    RPCSerializer_PushString(&s, size, (const char*)data);
+
+    RPCSerializer_Finalize(&s);
+    RPCSerializer_Send(&s, nfs_fd);
+    // ----------------------------------------------
+    RPCDeserializer d = {0};
+    RPCDeserializer_Init(&d, nfs_fd);
+
+    RPCHeader header = RPCDeserializer_RecvHeader(&d);
+
+    assert(header.xid == write_xid);
+
+    int accepted = RPCDeserializer_ReadBool(&d);
+    RPCDeserializer_SkipAuth(&d);
+    int accept_state = RPCDeserializer_ReadBool(&d);
+
+    nfsstat3 status = (nfsstat3)RPCDeserializer_ReadU32(&d);
+    if (status != 0) printf("Status: %s\n", nfsstat3_toChars(status));
+    // -----------------------------------------------------
+
+    if (status)
+    {
+        fprintf(stderr, "Error [%s] while reading '%s'\n"
+             , nfsstat3_toChars(status)
+             , "" /*LookupNameInCache(file)*/
+        );
+        return -1;
+    }
+
+    if (status == 0)
+    {
+        ReadWcc(&d);
+        uint32_t count =
+            RPCDeserializer_ReadU32(&d);
+        stable_how comitted = (stable_how) RPCDeserializer_ReadU32(&d);
+        uint64_t verf = RPCDeserializer_ReadU64(&d);
+        return count;
+    }
+}
+
 
 int64_t nfs_read(SOCKET nfs_fd, const fhandle3* file
                , void* data, uint32_t size
@@ -750,12 +901,7 @@ int populateCache_cb(const char* fName, const fhandle3* handle,
         }
         else if (attribs->type == NF3REG)
         {
-            const uint32_t entry_key = EntryKey(fName, len);
-            entry = CreateEntryInDirectoryByKey(cache, parentDir->cached_dir, fName, entry_key);
-            entry->type = ENTRY_TYPE_FILE;
-            entry->cached_file = cache->file_entries + cache->file_entries_size++;
-            entry->cached_file->crc32 = 0;
-            entry->cached_file->data = 0;
+            entry = CreateFileEntry(cache, parentDir, fName, len);
             entry->cached_file->size = attribs->size;
         }
         else
